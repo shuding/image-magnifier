@@ -77,32 +77,37 @@ function drawLiquidGlassMagnifier(
   const srcCenterX = centerX * scaleX
   const srcCenterY = centerY * scaleY
 
-  // Create output ImageData for the magnifier bounding box
   const diameter = Math.ceil(radius * 2)
-  const outputData = ctx.createImageData(diameter, diameter)
+  const offscreen = document.createElement("canvas")
+  offscreen.width = diameter
+  offscreen.height = diameter
+  const offCtx = offscreen.getContext("2d")
+  if (!offCtx) return
+
+  const outputData = offCtx.createImageData(diameter, diameter)
   const out = outputData.data
 
   const radiusSq = radius * radius
 
   for (let py = 0; py < diameter; py++) {
     for (let px = 0; px < diameter; px++) {
-      // Position relative to center, normalized to [-1, 1]
+      // Position relative to magnifier center
       const dx = px - radius
       const dy = py - radius
       const distSq = dx * dx + dy * dy
 
-      // Skip pixels outside the circle
-      if (distSq > radiusSq) continue
+      if (distSq >= radiusSq) continue
 
       const dist = Math.sqrt(distSq)
       const normDist = dist / radius // 0 at center, 1 at edge
 
-      const distortionStrength = 0.15
-      const distortion = 1 + distortionStrength * normDist * normDist
+      const distortionStrength = 0.2
+      const edgeFactor = normDist * normDist * normDist * normDist // flat center, curved edges
+      const distortion = 1 + distortionStrength * edgeFactor
 
-      // dx/dy are in canvas pixels, convert to image pixels first
-      const sampleDx = ((dx * scaleX) / zoom) * distortion
-      const sampleDy = ((dy * scaleY) / zoom) * distortion
+      // Convert canvas pixel offset to image pixel offset, apply zoom and distortion
+      const sampleDx = (dx * scaleX * distortion) / zoom
+      const sampleDy = (dy * scaleY * distortion) / zoom
 
       // Sample position in image coordinates
       const sampleX = srcCenterX + sampleDx
@@ -111,17 +116,19 @@ function drawLiquidGlassMagnifier(
       // Get the pixel color with bilinear interpolation
       const [r, g, b, a] = samplePixel(imageData, sampleX, sampleY)
 
-      const vignette = 1 - 0.3 * normDist * normDist
+      // Vignette: darken edges
+      const vignette = 1 - 0.25 * normDist * normDist
 
-      // Position the highlight in the upper-left quadrant
+      // Specular highlight in upper-left
       const highlightX = -0.4
       const highlightY = -0.5
       const highlightDx = dx / radius - highlightX
       const highlightDy = dy / radius - highlightY
       const highlightDist = Math.sqrt(highlightDx * highlightDx + highlightDy * highlightDy)
-      const highlightIntensity = Math.max(0, 1 - highlightDist * 1.8) * 0.25
+      const highlightIntensity = Math.max(0, 1 - highlightDist * 1.8) * 0.2
 
-      const edgeHighlight = normDist > 0.85 ? ((normDist - 0.85) / 0.15) * 0.1 : 0
+      // Edge rim light
+      const edgeHighlight = normDist > 0.9 ? ((normDist - 0.9) / 0.1) * 0.08 : 0
 
       // Combine effects
       const i = (py * diameter + px) * 4
@@ -132,12 +139,14 @@ function drawLiquidGlassMagnifier(
     }
   }
 
-  // Draw the magnifier content
+  offCtx.putImageData(outputData, 0, 0)
+
+  // Draw to main canvas with circular clip
   ctx.save()
   ctx.beginPath()
   ctx.arc(centerX, centerY, radius, 0, Math.PI * 2)
   ctx.clip()
-  ctx.putImageData(outputData, centerX - radius, centerY - radius)
+  ctx.drawImage(offscreen, centerX - radius, centerY - radius)
   ctx.restore()
 
   // Draw border with shadow
