@@ -430,10 +430,22 @@ export function ImageMagnifierTool() {
       )
       ctx.restore()
 
+      ctx.save()
       ctx.beginPath()
       ctx.arc(scaledX, scaledY, scaledRadius, 0, Math.PI * 2)
-      ctx.strokeStyle = "#6b7280"
+      ctx.shadowColor = "rgba(0, 0, 0, 0.3)"
+      ctx.shadowBlur = 15 * Math.min(scaleX, scaleY)
+      ctx.shadowOffsetX = 0
+      ctx.shadowOffsetY = 4 * Math.min(scaleX, scaleY)
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.8)"
       ctx.lineWidth = 2 * Math.min(scaleX, scaleY)
+      ctx.stroke()
+      ctx.restore()
+
+      ctx.beginPath()
+      ctx.arc(scaledX, scaledY, scaledRadius + 1, 0, Math.PI * 2)
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.4)"
+      ctx.lineWidth = 1 * Math.min(scaleX, scaleY)
       ctx.stroke()
     })
 
@@ -484,24 +496,39 @@ export function ImageMagnifierTool() {
       )
       ctx.restore()
 
+      ctx.save()
       ctx.beginPath()
       ctx.arc(scaledX, scaledY, scaledRadius, 0, Math.PI * 2)
-      ctx.strokeStyle = "#6b7280"
+      ctx.shadowColor = "rgba(0, 0, 0, 0.3)"
+      ctx.shadowBlur = 15 * Math.min(scaleX, scaleY)
+      ctx.shadowOffsetX = 0
+      ctx.shadowOffsetY = 4 * Math.min(scaleX, scaleY)
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.8)"
       ctx.lineWidth = 2 * Math.min(scaleX, scaleY)
+      ctx.stroke()
+      ctx.restore()
+
+      ctx.beginPath()
+      ctx.arc(scaledX, scaledY, scaledRadius + 1, 0, Math.PI * 2)
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.4)"
+      ctx.lineWidth = 1 * Math.min(scaleX, scaleY)
       ctx.stroke()
     })
 
-    tempCanvas.toBlob(async (blob) => {
-      if (blob) {
-        try {
-          await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })])
-          setCopied(true)
-          setTimeout(() => setCopied(false), 2000)
-        } catch (err) {
-          console.error("Failed to copy image:", err)
-        }
-      }
-    })
+    try {
+      const item = new ClipboardItem({
+        "image/png": new Promise((resolve) => {
+          tempCanvas.toBlob((blob) => {
+            resolve(blob!)
+          }, "image/png")
+        }),
+      })
+      await navigator.clipboard.write([item])
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (err) {
+      console.error("Failed to copy image:", err)
+    }
   }
 
   const selectedMag = magnifiers.find((m) => m.id === selectedMagnifier)
