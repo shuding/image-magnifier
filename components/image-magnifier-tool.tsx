@@ -15,14 +15,11 @@ interface Magnifier {
   zoom: number
 }
 
-function getImagePixelData(image: HTMLImageElement): ImageData | null {
-  const canvas = document.createElement("canvas")
-  canvas.width = image.naturalWidth
-  canvas.height = image.naturalHeight
-  const ctx = canvas.getContext("2d")
-  if (!ctx) return null
-  ctx.drawImage(image, 0, 0)
-  return ctx.getImageData(0, 0, canvas.width, canvas.height)
+function lanczos(x: number, a = 3): number {
+  if (x === 0) return 1
+  if (Math.abs(x) >= a) return 0
+  const pix = Math.PI * x
+  return (a * Math.sin(pix) * Math.sin(pix / a)) / (pix * pix)
 }
 
 function samplePixel(imageData: ImageData, x: number, y: number): [number, number, number, number] {
@@ -34,6 +31,8 @@ function samplePixel(imageData: ImageData, x: number, y: number): [number, numbe
 
   const x0 = Math.floor(x)
   const y0 = Math.floor(y)
+  const fx = x - x0
+  const fy = y - y0
 
   const getPixel = (px: number, py: number): [number, number, number, number] => {
     const cx = Math.max(0, Math.min(width - 1, px))
@@ -42,45 +41,54 @@ function samplePixel(imageData: ImageData, x: number, y: number): [number, numbe
     return [data[i], data[i + 1], data[i + 2], data[i + 3]]
   }
 
-  // Cubic interpolation kernel (Catmull-Rom)
-  const cubic = (t: number): [number, number, number, number] => {
-    const t2 = t * t
-    const t3 = t2 * t
-    return [
-      -0.5 * t3 + t2 - 0.5 * t, // w0
-      1.5 * t3 - 2.5 * t2 + 1, // w1
-      -1.5 * t3 + 2 * t2 + 0.5 * t, // w2
-      0.5 * t3 - 0.5 * t2, // w3
-    ]
-  }
-
-  const fx = x - x0
-  const fy = y - y0
-  const wx = cubic(fx)
-  const wy = cubic(fy)
-
+  // Lanczos-3: sample a 6x6 grid (a=3 means 3 pixels on each side)
+  const a = 3
   let r = 0,
     g = 0,
     b = 0,
-    a = 0
+    alpha = 0
+  let totalWeight = 0
 
-  for (let j = -1; j <= 2; j++) {
-    for (let i = -1; i <= 2; i++) {
+  for (let j = -a + 1; j <= a; j++) {
+    const wy = lanczos(fy - j, a)
+    for (let i = -a + 1; i <= a; i++) {
+      const wx = lanczos(fx - i, a)
+      const w = wx * wy
+      if (w === 0) continue
+
       const p = getPixel(x0 + i, y0 + j)
-      const w = wx[i + 1] * wy[j + 1]
       r += p[0] * w
       g += p[1] * w
       b += p[2] * w
-      a += p[3] * w
+      alpha += p[3] * w
+      totalWeight += w
     }
   }
 
+  // Normalize by total weight
+  if (totalWeight > 0) {
+    r /= totalWeight
+    g /= totalWeight
+    b /= totalWeight
+    alpha /= totalWeight
+  }
+
   return [
-    Math.max(0, Math.min(255, r)),
-    Math.max(0, Math.min(255, g)),
-    Math.max(0, Math.min(255, b)),
-    Math.max(0, Math.min(255, a)),
+    Math.max(0, Math.min(255, Math.round(r))),
+    Math.max(0, Math.min(255, Math.round(g))),
+    Math.max(0, Math.min(255, Math.round(b))),
+    Math.max(0, Math.min(255, Math.round(alpha))),
   ]
+}
+
+function getImagePixelData(image: HTMLImageElement): ImageData | null {
+  const canvas = document.createElement("canvas")
+  canvas.width = image.naturalWidth
+  canvas.height = image.naturalHeight
+  const ctx = canvas.getContext("2d")
+  if (!ctx) return null
+  ctx.drawImage(image, 0, 0)
+  return ctx.getImageData(0, 0, canvas.width, canvas.height)
 }
 
 function drawLiquidGlassMagnifier(
@@ -148,7 +156,7 @@ function drawLiquidGlassMagnifier(
       const sampleX = srcCenterX + sampleDx
       const sampleY = srcCenterY + sampleDy
 
-      // Get the pixel color with bicubic interpolation
+      // Get the pixel color with Lanczos interpolation
       let [r, g, b, a] = samplePixel(imageData, sampleX, sampleY)
 
       if (normDist > edgeStart) {
@@ -209,12 +217,6 @@ function drawLiquidGlassMagnifier(
   ctx.drawImage(offscreen, centerX - radius, centerY - radius)
   ctx.restore()
 
-  const gradient = ctx.createLinearGradient(centerX - radius, centerY - radius, centerX + radius, centerY + radius)
-  gradient.addColorStop(0, "rgba(255, 255, 255, 0.7)")
-  gradient.addColorStop(0.5, "rgba(255, 255, 255, 0.4)")
-  gradient.addColorStop(1, "rgba(200, 200, 220, 0.3)")
-
-  // Draw border with shadow
   ctx.save()
   ctx.beginPath()
   ctx.arc(centerX, centerY, radius, 0, Math.PI * 2)
@@ -222,24 +224,22 @@ function drawLiquidGlassMagnifier(
   ctx.shadowBlur = 20
   ctx.shadowOffsetX = 0
   ctx.shadowOffsetY = 6
-  ctx.strokeStyle = isSelected ? "#3b82f6" : gradient
-  ctx.lineWidth = isSelected ? 3 : 2.5
+
+  if (isSelected) {
+    ctx.strokeStyle = "#3b82f6"
+    ctx.lineWidth = 3
+  } else {
+    // Solid white border for glass effect
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.8)"
+    ctx.lineWidth = 2.5
+  }
   ctx.stroke()
   ctx.restore()
 
   if (!isSelected) {
-    const innerGradient = ctx.createLinearGradient(
-      centerX - radius,
-      centerY - radius,
-      centerX + radius,
-      centerY + radius,
-    )
-    innerGradient.addColorStop(0, "rgba(255, 255, 255, 0.25)")
-    innerGradient.addColorStop(1, "rgba(255, 255, 255, 0.05)")
-
     ctx.beginPath()
     ctx.arc(centerX, centerY, radius - 1.5, 0, Math.PI * 2)
-    ctx.strokeStyle = innerGradient
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.2)"
     ctx.lineWidth = 1
     ctx.stroke()
   }
