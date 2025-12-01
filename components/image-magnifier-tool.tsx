@@ -132,11 +132,12 @@ function drawLiquidGlassMagnifier(
 
       let distortion = 1
       if (normDist > edgeStart) {
-        // Smooth ramp from 0 to 1 in the edge zone
         const edgeProgress = (normDist - edgeStart) / (1 - edgeStart)
-        // Use smoothstep for natural curve
-        const smooth = edgeProgress * edgeProgress * (3 - 2 * edgeProgress)
-        distortion = 1 + distortionStrength * smooth
+        // Perlin's smootherstep: 6t^5 - 15t^4 + 10t^3 (C2 continuous - no derivative discontinuity)
+        const smooth = edgeProgress * edgeProgress * edgeProgress * (edgeProgress * (edgeProgress * 6 - 15) + 10)
+        // Apply additional power curve to push distortion even further toward the edge
+        const verySmooth = smooth * smooth
+        distortion = 1 + distortionStrength * verySmooth
       }
 
       // Convert canvas pixel offset to image pixel offset, apply zoom and distortion
@@ -147,14 +148,15 @@ function drawLiquidGlassMagnifier(
       const sampleX = srcCenterX + sampleDx
       const sampleY = srcCenterY + sampleDy
 
-      // Get the pixel color with bilinear interpolation
+      // Get the pixel color with bicubic interpolation
       let [r, g, b, a] = samplePixel(imageData, sampleX, sampleY)
 
       if (normDist > edgeStart) {
         const edgeProgress = (normDist - edgeStart) / (1 - edgeStart)
+        const smooth = edgeProgress * edgeProgress * edgeProgress * (edgeProgress * (edgeProgress * 6 - 15) + 10)
 
         // Subtle vignette at the very edge
-        const vignette = 1 - 0.15 * edgeProgress * edgeProgress
+        const vignette = 1 - 0.15 * smooth * smooth
         r *= vignette
         g *= vignette
         b *= vignette
