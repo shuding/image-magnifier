@@ -100,13 +100,13 @@ function drawLiquidGlassMagnifier(
       const distortionStrength = 0.15
       const distortion = 1 + distortionStrength * normDist * normDist
 
-      // Apply distortion to get sample offset
-      const sampleDx = (dx / zoom) * distortion
-      const sampleDy = (dy / zoom) * distortion
+      // dx/dy are in canvas pixels, convert to image pixels first
+      const sampleDx = ((dx * scaleX) / zoom) * distortion
+      const sampleDy = ((dy * scaleY) / zoom) * distortion
 
       // Sample position in image coordinates
-      const sampleX = srcCenterX + sampleDx * scaleX
-      const sampleY = srcCenterY + sampleDy * scaleY
+      const sampleX = srcCenterX + sampleDx
+      const sampleY = srcCenterY + sampleDy
 
       // Get the pixel color with bilinear interpolation
       const [r, g, b, a] = samplePixel(imageData, sampleX, sampleY)
