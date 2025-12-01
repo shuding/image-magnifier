@@ -89,6 +89,9 @@ function drawLiquidGlassMagnifier(
 
   const radiusSq = radius * radius
 
+  const edgeStart = 0.85 // Distortion only starts at 85% from center
+  const distortionStrength = 0.25 // How much the edge bends
+
   for (let py = 0; py < diameter; py++) {
     for (let px = 0; px < diameter; px++) {
       // Position relative to magnifier center
@@ -101,9 +104,14 @@ function drawLiquidGlassMagnifier(
       const dist = Math.sqrt(distSq)
       const normDist = dist / radius // 0 at center, 1 at edge
 
-      const distortionStrength = 0.2
-      const edgeFactor = normDist * normDist * normDist * normDist // flat center, curved edges
-      const distortion = 1 + distortionStrength * edgeFactor
+      let distortion = 1
+      if (normDist > edgeStart) {
+        // Smooth ramp from 0 to 1 in the edge zone
+        const edgeProgress = (normDist - edgeStart) / (1 - edgeStart)
+        // Use smoothstep for natural curve
+        const smooth = edgeProgress * edgeProgress * (3 - 2 * edgeProgress)
+        distortion = 1 + distortionStrength * smooth
+      }
 
       // Convert canvas pixel offset to image pixel offset, apply zoom and distortion
       const sampleDx = (dx * scaleX * distortion) / zoom
@@ -114,27 +122,51 @@ function drawLiquidGlassMagnifier(
       const sampleY = srcCenterY + sampleDy
 
       // Get the pixel color with bilinear interpolation
-      const [r, g, b, a] = samplePixel(imageData, sampleX, sampleY)
+      let [r, g, b, a] = samplePixel(imageData, sampleX, sampleY)
 
-      // Vignette: darken edges
-      const vignette = 1 - 0.25 * normDist * normDist
+      if (normDist > edgeStart) {
+        const edgeProgress = (normDist - edgeStart) / (1 - edgeStart)
 
-      // Specular highlight in upper-left
-      const highlightX = -0.4
-      const highlightY = -0.5
-      const highlightDx = dx / radius - highlightX
-      const highlightDy = dy / radius - highlightY
-      const highlightDist = Math.sqrt(highlightDx * highlightDx + highlightDy * highlightDy)
-      const highlightIntensity = Math.max(0, 1 - highlightDist * 1.8) * 0.2
+        // Subtle vignette at the very edge
+        const vignette = 1 - 0.15 * edgeProgress * edgeProgress
+        r *= vignette
+        g *= vignette
+        b *= vignette
 
-      // Edge rim light
-      const edgeHighlight = normDist > 0.9 ? ((normDist - 0.9) / 0.1) * 0.08 : 0
+        // Normalized direction from center
+        const ndx = dx / dist
+        const ndy = dy / dist
+        // Light coming from top-left (-0.7, -0.7 normalized)
+        const lightDot = -0.707 * ndx + -0.707 * ndy // dot product with light direction
+        // Rim intensity increases toward edge, modulated by light direction
+        const rimIntensity = edgeProgress * edgeProgress * 0.4
+        const rimLight = rimIntensity * (0.5 + 0.5 * lightDot) // 0 to rimIntensity based on angle
+
+        const warmTint = Math.max(0, lightDot) * edgeProgress * 0.12
+        const coolTint = Math.max(0, -lightDot) * edgeProgress * 0.08
+
+        r = Math.min(255, r + 255 * rimLight + 255 * warmTint)
+        g = Math.min(255, g + 255 * rimLight * 0.9)
+        b = Math.min(255, b + 255 * rimLight * 0.85 + 255 * coolTint)
+      }
+
+      const specX = 0
+      const specY = -0.55
+      const specDx = dx / radius - specX
+      const specDy = dy / radius - specY
+      const specDist = Math.sqrt(specDx * specDx + specDy * specDy)
+      const specIntensity = Math.max(0, 1 - specDist * 3) * 0.15
+      const specFalloff = specIntensity * specIntensity // sharper falloff
+
+      r = Math.min(255, r + 255 * specFalloff)
+      g = Math.min(255, g + 255 * specFalloff)
+      b = Math.min(255, b + 255 * specFalloff)
 
       // Combine effects
       const i = (py * diameter + px) * 4
-      out[i] = Math.min(255, r * vignette + 255 * highlightIntensity + 255 * edgeHighlight)
-      out[i + 1] = Math.min(255, g * vignette + 255 * highlightIntensity + 255 * edgeHighlight)
-      out[i + 2] = Math.min(255, b * vignette + 255 * highlightIntensity + 255 * edgeHighlight)
+      out[i] = r
+      out[i + 1] = g
+      out[i + 2] = b
       out[i + 3] = a
     }
   }
@@ -149,25 +181,40 @@ function drawLiquidGlassMagnifier(
   ctx.drawImage(offscreen, centerX - radius, centerY - radius)
   ctx.restore()
 
+  const gradient = ctx.createLinearGradient(centerX - radius, centerY - radius, centerX + radius, centerY + radius)
+  gradient.addColorStop(0, "rgba(255, 255, 255, 0.7)")
+  gradient.addColorStop(0.5, "rgba(255, 255, 255, 0.4)")
+  gradient.addColorStop(1, "rgba(200, 200, 220, 0.3)")
+
   // Draw border with shadow
   ctx.save()
   ctx.beginPath()
   ctx.arc(centerX, centerY, radius, 0, Math.PI * 2)
-  ctx.shadowColor = "rgba(0, 0, 0, 0.3)"
-  ctx.shadowBlur = 15
+  ctx.shadowColor = "rgba(0, 0, 0, 0.25)"
+  ctx.shadowBlur = 20
   ctx.shadowOffsetX = 0
-  ctx.shadowOffsetY = 4
-  ctx.strokeStyle = isSelected ? "#3b82f6" : "rgba(255, 255, 255, 0.8)"
-  ctx.lineWidth = isSelected ? 3 : 2
+  ctx.shadowOffsetY = 6
+  ctx.strokeStyle = isSelected ? "#3b82f6" : gradient
+  ctx.lineWidth = isSelected ? 3 : 2.5
   ctx.stroke()
   ctx.restore()
 
-  // Outer highlight ring
-  ctx.beginPath()
-  ctx.arc(centerX, centerY, radius + 1, 0, Math.PI * 2)
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.4)"
-  ctx.lineWidth = 1
-  ctx.stroke()
+  if (!isSelected) {
+    const innerGradient = ctx.createLinearGradient(
+      centerX - radius,
+      centerY - radius,
+      centerX + radius,
+      centerY + radius,
+    )
+    innerGradient.addColorStop(0, "rgba(255, 255, 255, 0.25)")
+    innerGradient.addColorStop(1, "rgba(255, 255, 255, 0.05)")
+
+    ctx.beginPath()
+    ctx.arc(centerX, centerY, radius - 1.5, 0, Math.PI * 2)
+    ctx.strokeStyle = innerGradient
+    ctx.lineWidth = 1
+    ctx.stroke()
+  }
 
   // Draw resize handle if selected
   if (isSelected) {
