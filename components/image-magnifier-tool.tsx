@@ -34,28 +34,53 @@ function samplePixel(imageData: ImageData, x: number, y: number): [number, numbe
 
   const x0 = Math.floor(x)
   const y0 = Math.floor(y)
-  const x1 = Math.min(x0 + 1, width - 1)
-  const y1 = Math.min(y0 + 1, height - 1)
-
-  const fx = x - x0
-  const fy = y - y0
 
   const getPixel = (px: number, py: number): [number, number, number, number] => {
-    const i = (py * width + px) * 4
+    const cx = Math.max(0, Math.min(width - 1, px))
+    const cy = Math.max(0, Math.min(height - 1, py))
+    const i = (cy * width + cx) * 4
     return [data[i], data[i + 1], data[i + 2], data[i + 3]]
   }
 
-  const p00 = getPixel(x0, y0)
-  const p10 = getPixel(x1, y0)
-  const p01 = getPixel(x0, y1)
-  const p11 = getPixel(x1, y1)
+  // Cubic interpolation kernel (Catmull-Rom)
+  const cubic = (t: number): [number, number, number, number] => {
+    const t2 = t * t
+    const t3 = t2 * t
+    return [
+      -0.5 * t3 + t2 - 0.5 * t, // w0
+      1.5 * t3 - 2.5 * t2 + 1, // w1
+      -1.5 * t3 + 2 * t2 + 0.5 * t, // w2
+      0.5 * t3 - 0.5 * t2, // w3
+    ]
+  }
 
-  const r = p00[0] * (1 - fx) * (1 - fy) + p10[0] * fx * (1 - fy) + p01[0] * (1 - fx) * fy + p11[0] * fx * fy
-  const g = p00[1] * (1 - fx) * (1 - fy) + p10[1] * fx * (1 - fy) + p01[1] * (1 - fx) * fy + p11[1] * fx * fy
-  const b = p00[2] * (1 - fx) * (1 - fy) + p10[2] * fx * (1 - fy) + p01[2] * (1 - fx) * fy + p11[2] * fx * fy
-  const a = p00[3] * (1 - fx) * (1 - fy) + p10[3] * fx * (1 - fy) + p01[3] * (1 - fx) * fy + p11[3] * fx * fy
+  const fx = x - x0
+  const fy = y - y0
+  const wx = cubic(fx)
+  const wy = cubic(fy)
 
-  return [r, g, b, a]
+  let r = 0,
+    g = 0,
+    b = 0,
+    a = 0
+
+  for (let j = -1; j <= 2; j++) {
+    for (let i = -1; i <= 2; i++) {
+      const p = getPixel(x0 + i, y0 + j)
+      const w = wx[i + 1] * wy[j + 1]
+      r += p[0] * w
+      g += p[1] * w
+      b += p[2] * w
+      a += p[3] * w
+    }
+  }
+
+  return [
+    Math.max(0, Math.min(255, r)),
+    Math.max(0, Math.min(255, g)),
+    Math.max(0, Math.min(255, b)),
+    Math.max(0, Math.min(255, a)),
+  ]
 }
 
 function drawLiquidGlassMagnifier(
@@ -787,6 +812,11 @@ export function ImageMagnifierTool() {
               </div>
             )}
 
+            <div className="flex items-center justify-between py-2">
+              <span className="text-xs text-neutral-600">Glass Effect</span>
+              <Switch checked={liquidGlassEnabled} onCheckedChange={setLiquidGlassEnabled} />
+            </div>
+
             <div className="border-t border-neutral-100 pt-3">
               <div className="flex gap-2">
                 <Button
@@ -835,11 +865,6 @@ export function ImageMagnifierTool() {
                 </a>
                 .
               </p>
-            </div>
-
-            <div className="flex items-center justify-between py-2">
-              <span className="text-xs text-neutral-600">Liquid Glass</span>
-              <Switch checked={liquidGlassEnabled} onCheckedChange={setLiquidGlassEnabled} />
             </div>
           </div>
 
