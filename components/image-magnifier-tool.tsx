@@ -14,8 +14,169 @@ interface Magnifier {
   zoom: number
 }
 
+function getImagePixelData(image: HTMLImageElement): ImageData | null {
+  const canvas = document.createElement("canvas")
+  canvas.width = image.naturalWidth
+  canvas.height = image.naturalHeight
+  const ctx = canvas.getContext("2d")
+  if (!ctx) return null
+  ctx.drawImage(image, 0, 0)
+  return ctx.getImageData(0, 0, canvas.width, canvas.height)
+}
+
+function samplePixel(imageData: ImageData, x: number, y: number): [number, number, number, number] {
+  const { width, height, data } = imageData
+
+  // Clamp coordinates
+  x = Math.max(0, Math.min(width - 1, x))
+  y = Math.max(0, Math.min(height - 1, y))
+
+  const x0 = Math.floor(x)
+  const y0 = Math.floor(y)
+  const x1 = Math.min(x0 + 1, width - 1)
+  const y1 = Math.min(y0 + 1, height - 1)
+
+  const fx = x - x0
+  const fy = y - y0
+
+  const getPixel = (px: number, py: number): [number, number, number, number] => {
+    const i = (py * width + px) * 4
+    return [data[i], data[i + 1], data[i + 2], data[i + 3]]
+  }
+
+  const p00 = getPixel(x0, y0)
+  const p10 = getPixel(x1, y0)
+  const p01 = getPixel(x0, y1)
+  const p11 = getPixel(x1, y1)
+
+  const r = p00[0] * (1 - fx) * (1 - fy) + p10[0] * fx * (1 - fy) + p01[0] * (1 - fx) * fy + p11[0] * fx * fy
+  const g = p00[1] * (1 - fx) * (1 - fy) + p10[1] * fx * (1 - fy) + p01[1] * (1 - fx) * fy + p11[1] * fx * fy
+  const b = p00[2] * (1 - fx) * (1 - fy) + p10[2] * fx * (1 - fy) + p01[2] * (1 - fx) * fy + p11[2] * fx * fy
+  const a = p00[3] * (1 - fx) * (1 - fy) + p10[3] * fx * (1 - fy) + p01[3] * (1 - fx) * fy + p11[3] * fx * fy
+
+  return [r, g, b, a]
+}
+
+function drawLiquidGlassMagnifier(
+  ctx: CanvasRenderingContext2D,
+  imageData: ImageData,
+  mag: { x: number; y: number; radius: number; zoom: number },
+  canvasWidth: number,
+  canvasHeight: number,
+  isSelected: boolean,
+) {
+  const { x: centerX, y: centerY, radius, zoom } = mag
+  const imgWidth = imageData.width
+  const imgHeight = imageData.height
+
+  // Scale factors from canvas to image coordinates
+  const scaleX = imgWidth / canvasWidth
+  const scaleY = imgHeight / canvasHeight
+
+  // Source center in image coordinates
+  const srcCenterX = centerX * scaleX
+  const srcCenterY = centerY * scaleY
+
+  // Create output ImageData for the magnifier bounding box
+  const diameter = Math.ceil(radius * 2)
+  const outputData = ctx.createImageData(diameter, diameter)
+  const out = outputData.data
+
+  const radiusSq = radius * radius
+
+  for (let py = 0; py < diameter; py++) {
+    for (let px = 0; px < diameter; px++) {
+      // Position relative to center, normalized to [-1, 1]
+      const dx = px - radius
+      const dy = py - radius
+      const distSq = dx * dx + dy * dy
+
+      // Skip pixels outside the circle
+      if (distSq > radiusSq) continue
+
+      const dist = Math.sqrt(distSq)
+      const normDist = dist / radius // 0 at center, 1 at edge
+
+      const distortionStrength = 0.15
+      const distortion = 1 + distortionStrength * normDist * normDist
+
+      // Apply distortion to get sample offset
+      const sampleDx = (dx / zoom) * distortion
+      const sampleDy = (dy / zoom) * distortion
+
+      // Sample position in image coordinates
+      const sampleX = srcCenterX + sampleDx * scaleX
+      const sampleY = srcCenterY + sampleDy * scaleY
+
+      // Get the pixel color with bilinear interpolation
+      const [r, g, b, a] = samplePixel(imageData, sampleX, sampleY)
+
+      const vignette = 1 - 0.3 * normDist * normDist
+
+      // Position the highlight in the upper-left quadrant
+      const highlightX = -0.4
+      const highlightY = -0.5
+      const highlightDx = dx / radius - highlightX
+      const highlightDy = dy / radius - highlightY
+      const highlightDist = Math.sqrt(highlightDx * highlightDx + highlightDy * highlightDy)
+      const highlightIntensity = Math.max(0, 1 - highlightDist * 1.8) * 0.25
+
+      const edgeHighlight = normDist > 0.85 ? ((normDist - 0.85) / 0.15) * 0.1 : 0
+
+      // Combine effects
+      const i = (py * diameter + px) * 4
+      out[i] = Math.min(255, r * vignette + 255 * highlightIntensity + 255 * edgeHighlight)
+      out[i + 1] = Math.min(255, g * vignette + 255 * highlightIntensity + 255 * edgeHighlight)
+      out[i + 2] = Math.min(255, b * vignette + 255 * highlightIntensity + 255 * edgeHighlight)
+      out[i + 3] = a
+    }
+  }
+
+  // Draw the magnifier content
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(centerX, centerY, radius, 0, Math.PI * 2)
+  ctx.clip()
+  ctx.putImageData(outputData, centerX - radius, centerY - radius)
+  ctx.restore()
+
+  // Draw border with shadow
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(centerX, centerY, radius, 0, Math.PI * 2)
+  ctx.shadowColor = "rgba(0, 0, 0, 0.3)"
+  ctx.shadowBlur = 15
+  ctx.shadowOffsetX = 0
+  ctx.shadowOffsetY = 4
+  ctx.strokeStyle = isSelected ? "#3b82f6" : "rgba(255, 255, 255, 0.8)"
+  ctx.lineWidth = isSelected ? 3 : 2
+  ctx.stroke()
+  ctx.restore()
+
+  // Outer highlight ring
+  ctx.beginPath()
+  ctx.arc(centerX, centerY, radius + 1, 0, Math.PI * 2)
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.4)"
+  ctx.lineWidth = 1
+  ctx.stroke()
+
+  // Draw resize handle if selected
+  if (isSelected) {
+    const handleX = centerX + radius * Math.cos(Math.PI / 4)
+    const handleY = centerY + radius * Math.sin(Math.PI / 4)
+    ctx.beginPath()
+    ctx.arc(handleX, handleY, 8, 0, Math.PI * 2)
+    ctx.fillStyle = "#3b82f6"
+    ctx.fill()
+    ctx.strokeStyle = "#ffffff"
+    ctx.lineWidth = 2
+    ctx.stroke()
+  }
+}
+
 export function ImageMagnifierTool() {
   const [image, setImage] = useState<HTMLImageElement | null>(null)
+  const [imagePixelData, setImagePixelData] = useState<ImageData | null>(null)
   const [magnifiers, setMagnifiers] = useState<Magnifier[]>([])
   const [selectedMagnifier, setSelectedMagnifier] = useState<string | null>(null)
   const [isDragging, setIsDragging] = useState(false)
@@ -48,7 +209,7 @@ export function ImageMagnifierTool() {
 
   const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current
-    if (!canvas || !image || canvasDisplaySize.width === 0) return
+    if (!canvas || !image || !imagePixelData || canvasDisplaySize.width === 0) return
 
     const ctx = canvas.getContext("2d")
     if (!ctx) return
@@ -60,63 +221,16 @@ export function ImageMagnifierTool() {
     ctx.drawImage(image, 0, 0, canvasDisplaySize.width, canvasDisplaySize.height)
 
     magnifiers.forEach((mag) => {
-      ctx.save()
-
-      ctx.beginPath()
-      ctx.arc(mag.x, mag.y, mag.radius, 0, Math.PI * 2)
-      ctx.clip()
-
-      const scaleX = image.naturalWidth / canvasDisplaySize.width
-      const scaleY = image.naturalHeight / canvasDisplaySize.height
-      const sourceX = mag.x * scaleX
-      const sourceY = mag.y * scaleY
-
-      const zoomRadius = mag.radius / mag.zoom
-      ctx.drawImage(
-        image,
-        sourceX - zoomRadius * scaleX,
-        sourceY - zoomRadius * scaleY,
-        zoomRadius * 2 * scaleX,
-        zoomRadius * 2 * scaleY,
-        mag.x - mag.radius,
-        mag.y - mag.radius,
-        mag.radius * 2,
-        mag.radius * 2,
+      drawLiquidGlassMagnifier(
+        ctx,
+        imagePixelData,
+        mag,
+        canvasDisplaySize.width,
+        canvasDisplaySize.height,
+        selectedMagnifier === mag.id,
       )
-
-      ctx.restore()
-
-      ctx.save()
-      ctx.beginPath()
-      ctx.arc(mag.x, mag.y, mag.radius, 0, Math.PI * 2)
-      ctx.shadowColor = "rgba(0, 0, 0, 0.3)"
-      ctx.shadowBlur = 15
-      ctx.shadowOffsetX = 0
-      ctx.shadowOffsetY = 4
-      ctx.strokeStyle = selectedMagnifier === mag.id ? "#3b82f6" : "rgba(255, 255, 255, 0.8)"
-      ctx.lineWidth = selectedMagnifier === mag.id ? 3 : 2
-      ctx.stroke()
-      ctx.restore()
-
-      ctx.beginPath()
-      ctx.arc(mag.x, mag.y, mag.radius + 1, 0, Math.PI * 2)
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.4)"
-      ctx.lineWidth = 1
-      ctx.stroke()
-
-      if (selectedMagnifier === mag.id) {
-        const handleX = mag.x + mag.radius * Math.cos(Math.PI / 4)
-        const handleY = mag.y + mag.radius * Math.sin(Math.PI / 4)
-        ctx.beginPath()
-        ctx.arc(handleX, handleY, 8, 0, Math.PI * 2)
-        ctx.fillStyle = "#3b82f6"
-        ctx.fill()
-        ctx.strokeStyle = "#ffffff"
-        ctx.lineWidth = 2
-        ctx.stroke()
-      }
     })
-  }, [image, magnifiers, selectedMagnifier, canvasDisplaySize])
+  }, [image, imagePixelData, magnifiers, selectedMagnifier, canvasDisplaySize])
 
   useEffect(() => {
     drawCanvas()
@@ -168,6 +282,7 @@ export function ImageMagnifierTool() {
         setSelectedMagnifier(null)
         setCanvasDisplaySize({ width: 0, height: 0 })
         setImage(img)
+        setImagePixelData(getImagePixelData(img))
       }
       img.src = e.target?.result as string
     }
@@ -390,7 +505,7 @@ export function ImageMagnifierTool() {
   }
 
   const downloadImage = () => {
-    if (!image) return
+    if (!image || !imagePixelData) return
 
     const tempCanvas = document.createElement("canvas")
     tempCanvas.width = image.naturalWidth
@@ -404,49 +519,20 @@ export function ImageMagnifierTool() {
     const scaleY = image.naturalHeight / canvasDisplaySize.height
 
     magnifiers.forEach((mag) => {
-      const scaledX = mag.x * scaleX
-      const scaledY = mag.y * scaleY
-      const scaledRadius = mag.radius * Math.min(scaleX, scaleY)
-
-      ctx.save()
-      ctx.beginPath()
-      ctx.arc(scaledX, scaledY, scaledRadius, 0, Math.PI * 2)
-      ctx.clip()
-
-      const sourceX = scaledX
-      const sourceY = scaledY
-      const zoomRadius = scaledRadius / mag.zoom
-
-      ctx.drawImage(
-        image,
-        sourceX - zoomRadius,
-        sourceY - zoomRadius,
-        zoomRadius * 2,
-        zoomRadius * 2,
-        scaledX - scaledRadius,
-        scaledY - scaledRadius,
-        scaledRadius * 2,
-        scaledRadius * 2,
+      const scaledMag = {
+        x: mag.x * scaleX,
+        y: mag.y * scaleY,
+        radius: mag.radius * Math.min(scaleX, scaleY),
+        zoom: mag.zoom,
+      }
+      drawLiquidGlassMagnifier(
+        ctx,
+        imagePixelData,
+        scaledMag,
+        image.naturalWidth,
+        image.naturalHeight,
+        false, // never show selection in export
       )
-      ctx.restore()
-
-      ctx.save()
-      ctx.beginPath()
-      ctx.arc(scaledX, scaledY, scaledRadius, 0, Math.PI * 2)
-      ctx.shadowColor = "rgba(0, 0, 0, 0.3)"
-      ctx.shadowBlur = 15 * Math.min(scaleX, scaleY)
-      ctx.shadowOffsetX = 0
-      ctx.shadowOffsetY = 4 * Math.min(scaleX, scaleY)
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.8)"
-      ctx.lineWidth = 2 * Math.min(scaleX, scaleY)
-      ctx.stroke()
-      ctx.restore()
-
-      ctx.beginPath()
-      ctx.arc(scaledX, scaledY, scaledRadius + 1, 0, Math.PI * 2)
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.4)"
-      ctx.lineWidth = 1 * Math.min(scaleX, scaleY)
-      ctx.stroke()
     })
 
     const link = document.createElement("a")
@@ -456,7 +542,7 @@ export function ImageMagnifierTool() {
   }
 
   const copyImage = async () => {
-    if (!image) return
+    if (!image || !imagePixelData) return
 
     const tempCanvas = document.createElement("canvas")
     tempCanvas.width = image.naturalWidth
@@ -470,49 +556,13 @@ export function ImageMagnifierTool() {
     const scaleY = image.naturalHeight / canvasDisplaySize.height
 
     magnifiers.forEach((mag) => {
-      const scaledX = mag.x * scaleX
-      const scaledY = mag.y * scaleY
-      const scaledRadius = mag.radius * Math.min(scaleX, scaleY)
-
-      ctx.save()
-      ctx.beginPath()
-      ctx.arc(scaledX, scaledY, scaledRadius, 0, Math.PI * 2)
-      ctx.clip()
-
-      const sourceX = scaledX
-      const sourceY = scaledY
-      const zoomRadius = scaledRadius / mag.zoom
-
-      ctx.drawImage(
-        image,
-        sourceX - zoomRadius,
-        sourceY - zoomRadius,
-        zoomRadius * 2,
-        zoomRadius * 2,
-        scaledX - scaledRadius,
-        scaledY - scaledRadius,
-        scaledRadius * 2,
-        scaledRadius * 2,
-      )
-      ctx.restore()
-
-      ctx.save()
-      ctx.beginPath()
-      ctx.arc(scaledX, scaledY, scaledRadius, 0, Math.PI * 2)
-      ctx.shadowColor = "rgba(0, 0, 0, 0.3)"
-      ctx.shadowBlur = 15 * Math.min(scaleX, scaleY)
-      ctx.shadowOffsetX = 0
-      ctx.shadowOffsetY = 4 * Math.min(scaleX, scaleY)
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.8)"
-      ctx.lineWidth = 2 * Math.min(scaleX, scaleY)
-      ctx.stroke()
-      ctx.restore()
-
-      ctx.beginPath()
-      ctx.arc(scaledX, scaledY, scaledRadius + 1, 0, Math.PI * 2)
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.4)"
-      ctx.lineWidth = 1 * Math.min(scaleX, scaleY)
-      ctx.stroke()
+      const scaledMag = {
+        x: mag.x * scaleX,
+        y: mag.y * scaleY,
+        radius: mag.radius * Math.min(scaleX, scaleY),
+        zoom: mag.zoom,
+      }
+      drawLiquidGlassMagnifier(ctx, imagePixelData, scaledMag, image.naturalWidth, image.naturalHeight, false)
     })
 
     try {
