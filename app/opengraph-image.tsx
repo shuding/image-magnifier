@@ -10,6 +10,8 @@ export const size = {
 export const contentType = "image/png"
 
 export default async function Image() {
+  const geistFont = await fetch(new URL("/images/geist-regular.ttf")).then((res) => res.arrayBuffer())
+
   return new ImageResponse(
     <div
       style={{
@@ -21,6 +23,7 @@ export default async function Image() {
         justifyContent: "center",
         backgroundColor: "#f5f5f5",
         position: "relative",
+        fontFamily: "Geist",
       }}
     >
       {/* Background pattern */}
@@ -164,6 +167,14 @@ export default async function Image() {
     </div>,
     {
       ...size,
+      fonts: [
+        {
+          name: "Geist",
+          data: geistFont,
+          style: "normal",
+          weight: 400,
+        },
+      ],
     },
   )
 }
