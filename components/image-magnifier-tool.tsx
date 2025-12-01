@@ -4,6 +4,7 @@ import type React from "react"
 import { useState, useRef, useCallback, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
+import { Switch } from "@/components/ui/switch"
 import { Upload, Plus, Download, Copy, Trash2, Check, Menu, X } from "lucide-react"
 
 interface Magnifier {
@@ -230,6 +231,71 @@ function drawLiquidGlassMagnifier(
   }
 }
 
+function drawSimpleMagnifier(
+  ctx: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  mag: { x: number; y: number; radius: number; zoom: number },
+  canvasWidth: number,
+  canvasHeight: number,
+  isSelected: boolean,
+) {
+  const { x: centerX, y: centerY, radius, zoom } = mag
+
+  // Calculate source region in image coordinates
+  const scaleX = image.naturalWidth / canvasWidth
+  const scaleY = image.naturalHeight / canvasHeight
+
+  const srcCenterX = centerX * scaleX
+  const srcCenterY = centerY * scaleY
+  const srcRadius = (radius * Math.min(scaleX, scaleY)) / zoom
+
+  // Clip to circle
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(centerX, centerY, radius, 0, Math.PI * 2)
+  ctx.clip()
+
+  // Draw magnified content
+  ctx.drawImage(
+    image,
+    srcCenterX - srcRadius,
+    srcCenterY - srcRadius,
+    srcRadius * 2,
+    srcRadius * 2,
+    centerX - radius,
+    centerY - radius,
+    radius * 2,
+    radius * 2,
+  )
+  ctx.restore()
+
+  // Draw border
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(centerX, centerY, radius, 0, Math.PI * 2)
+  ctx.shadowColor = "rgba(0, 0, 0, 0.25)"
+  ctx.shadowBlur = 20
+  ctx.shadowOffsetX = 0
+  ctx.shadowOffsetY = 6
+  ctx.strokeStyle = isSelected ? "#3b82f6" : "rgba(255, 255, 255, 0.8)"
+  ctx.lineWidth = isSelected ? 3 : 2.5
+  ctx.stroke()
+  ctx.restore()
+
+  // Draw resize handle if selected
+  if (isSelected) {
+    const handleX = centerX + radius * Math.cos(Math.PI / 4)
+    const handleY = centerY + radius * Math.sin(Math.PI / 4)
+    ctx.beginPath()
+    ctx.arc(handleX, handleY, 8, 0, Math.PI * 2)
+    ctx.fillStyle = "#3b82f6"
+    ctx.fill()
+    ctx.strokeStyle = "#ffffff"
+    ctx.lineWidth = 2
+    ctx.stroke()
+  }
+}
+
 export function ImageMagnifierTool() {
   const [image, setImage] = useState<HTMLImageElement | null>(null)
   const [imagePixelData, setImagePixelData] = useState<ImageData | null>(null)
@@ -242,6 +308,7 @@ export function ImageMagnifierTool() {
   const [isDragOver, setIsDragOver] = useState(false)
   const [canvasDisplaySize, setCanvasDisplaySize] = useState({ width: 0, height: 0 })
   const [isPanelOpen, setIsPanelOpen] = useState(false)
+  const [liquidGlassEnabled, setLiquidGlassEnabled] = useState(true)
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -277,16 +344,27 @@ export function ImageMagnifierTool() {
     ctx.drawImage(image, 0, 0, canvasDisplaySize.width, canvasDisplaySize.height)
 
     magnifiers.forEach((mag) => {
-      drawLiquidGlassMagnifier(
-        ctx,
-        imagePixelData,
-        mag,
-        canvasDisplaySize.width,
-        canvasDisplaySize.height,
-        selectedMagnifier === mag.id,
-      )
+      if (liquidGlassEnabled) {
+        drawLiquidGlassMagnifier(
+          ctx,
+          imagePixelData,
+          mag,
+          canvasDisplaySize.width,
+          canvasDisplaySize.height,
+          selectedMagnifier === mag.id,
+        )
+      } else {
+        drawSimpleMagnifier(
+          ctx,
+          image,
+          mag,
+          canvasDisplaySize.width,
+          canvasDisplaySize.height,
+          selectedMagnifier === mag.id,
+        )
+      }
     })
-  }, [image, imagePixelData, magnifiers, selectedMagnifier, canvasDisplaySize])
+  }, [image, imagePixelData, magnifiers, selectedMagnifier, canvasDisplaySize, liquidGlassEnabled])
 
   useEffect(() => {
     drawCanvas()
@@ -581,14 +659,11 @@ export function ImageMagnifierTool() {
         radius: mag.radius * Math.min(scaleX, scaleY),
         zoom: mag.zoom,
       }
-      drawLiquidGlassMagnifier(
-        ctx,
-        imagePixelData,
-        scaledMag,
-        image.naturalWidth,
-        image.naturalHeight,
-        false, // never show selection in export
-      )
+      if (liquidGlassEnabled) {
+        drawLiquidGlassMagnifier(ctx, imagePixelData, scaledMag, image.naturalWidth, image.naturalHeight, false)
+      } else {
+        drawSimpleMagnifier(ctx, image, scaledMag, image.naturalWidth, image.naturalHeight, false)
+      }
     })
 
     const link = document.createElement("a")
@@ -618,7 +693,11 @@ export function ImageMagnifierTool() {
         radius: mag.radius * Math.min(scaleX, scaleY),
         zoom: mag.zoom,
       }
-      drawLiquidGlassMagnifier(ctx, imagePixelData, scaledMag, image.naturalWidth, image.naturalHeight, false)
+      if (liquidGlassEnabled) {
+        drawLiquidGlassMagnifier(ctx, imagePixelData, scaledMag, image.naturalWidth, image.naturalHeight, false)
+      } else {
+        drawSimpleMagnifier(ctx, image, scaledMag, image.naturalWidth, image.naturalHeight, false)
+      }
     })
 
     try {
@@ -756,6 +835,11 @@ export function ImageMagnifierTool() {
                 </a>
                 .
               </p>
+            </div>
+
+            <div className="flex items-center justify-between py-2">
+              <span className="text-xs text-neutral-600">Liquid Glass</span>
+              <Switch checked={liquidGlassEnabled} onCheckedChange={setLiquidGlassEnabled} />
             </div>
           </div>
 
