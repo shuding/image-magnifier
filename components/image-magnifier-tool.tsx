@@ -11,6 +11,8 @@ interface Magnifier {
   x: number
   y: number
   radius: number
+  width: number
+  height: number
   zoom: number
   shape: "circle" | "rectangle"
 }
@@ -85,8 +87,9 @@ export function ImageMagnifierTool() {
 
       ctx.beginPath()
       if (mag.shape === "rectangle") {
-        const halfSize = mag.radius
-        ctx.roundRect(mag.x - halfSize, mag.y - halfSize, halfSize * 2, halfSize * 2, 8)
+        const halfWidth = mag.width / 2
+        const halfHeight = mag.height / 2
+        ctx.roundRect(mag.x - halfWidth, mag.y - halfHeight, mag.width, mag.height, 8)
       } else {
         ctx.arc(mag.x, mag.y, mag.radius, 0, Math.PI * 2)
       }
@@ -97,26 +100,43 @@ export function ImageMagnifierTool() {
       const sourceX = mag.x * scaleX
       const sourceY = mag.y * scaleY
 
-      const zoomRadius = mag.radius / mag.zoom
-      ctx.drawImage(
-        image,
-        sourceX - zoomRadius * scaleX,
-        sourceY - zoomRadius * scaleY,
-        zoomRadius * 2 * scaleX,
-        zoomRadius * 2 * scaleY,
-        mag.x - mag.radius,
-        mag.y - mag.radius,
-        mag.radius * 2,
-        mag.radius * 2,
-      )
+      if (mag.shape === "rectangle") {
+        const zoomWidth = mag.width / 2 / mag.zoom
+        const zoomHeight = mag.height / 2 / mag.zoom
+        ctx.drawImage(
+          image,
+          sourceX - zoomWidth * scaleX,
+          sourceY - zoomHeight * scaleY,
+          zoomWidth * 2 * scaleX,
+          zoomHeight * 2 * scaleY,
+          mag.x - mag.width / 2,
+          mag.y - mag.height / 2,
+          mag.width,
+          mag.height,
+        )
+      } else {
+        const zoomRadius = mag.radius / mag.zoom
+        ctx.drawImage(
+          image,
+          sourceX - zoomRadius * scaleX,
+          sourceY - zoomRadius * scaleY,
+          zoomRadius * 2 * scaleX,
+          zoomRadius * 2 * scaleY,
+          mag.x - mag.radius,
+          mag.y - mag.radius,
+          mag.radius * 2,
+          mag.radius * 2,
+        )
+      }
 
       ctx.restore()
 
       ctx.save()
       ctx.beginPath()
       if (mag.shape === "rectangle") {
-        const halfSize = mag.radius
-        ctx.roundRect(mag.x - halfSize, mag.y - halfSize, halfSize * 2, halfSize * 2, 8)
+        const halfWidth = mag.width / 2
+        const halfHeight = mag.height / 2
+        ctx.roundRect(mag.x - halfWidth, mag.y - halfHeight, mag.width, mag.height, 8)
       } else {
         ctx.arc(mag.x, mag.y, mag.radius, 0, Math.PI * 2)
       }
@@ -131,8 +151,9 @@ export function ImageMagnifierTool() {
 
       ctx.beginPath()
       if (mag.shape === "rectangle") {
-        const halfSize = mag.radius + 1
-        ctx.roundRect(mag.x - halfSize, mag.y - halfSize, halfSize * 2, halfSize * 2, 8)
+        const halfWidth = mag.width / 2 + 1
+        const halfHeight = mag.height / 2 + 1
+        ctx.roundRect(mag.x - halfWidth, mag.y - halfHeight, halfWidth * 2, halfHeight * 2, 8)
       } else {
         ctx.arc(mag.x, mag.y, mag.radius + 1, 0, Math.PI * 2)
       }
@@ -143,8 +164,8 @@ export function ImageMagnifierTool() {
       if (selectedMagnifier === mag.id) {
         let handleX: number, handleY: number
         if (mag.shape === "rectangle") {
-          handleX = mag.x + mag.radius
-          handleY = mag.y + mag.radius
+          handleX = mag.x + mag.width / 2
+          handleY = mag.y + mag.height / 2
         } else {
           handleX = mag.x + mag.radius * Math.cos(Math.PI / 4)
           handleY = mag.y + mag.radius * Math.sin(Math.PI / 4)
@@ -253,6 +274,8 @@ export function ImageMagnifierTool() {
       x: canvasDisplaySize.width / 2,
       y: canvasDisplaySize.height / 2,
       radius: 60,
+      width: 120,
+      height: 120,
       zoom: 2,
       shape,
     }
@@ -288,8 +311,8 @@ export function ImageMagnifierTool() {
   const isOnResizeHandle = (x: number, y: number, mag: Magnifier) => {
     let handleX: number, handleY: number
     if (mag.shape === "rectangle") {
-      handleX = mag.x + mag.radius
-      handleY = mag.y + mag.radius
+      handleX = mag.x + mag.width / 2
+      handleY = mag.y + mag.height / 2
     } else {
       handleX = mag.x + mag.radius * Math.cos(Math.PI / 4)
       handleY = mag.y + mag.radius * Math.sin(Math.PI / 4)
@@ -300,7 +323,9 @@ export function ImageMagnifierTool() {
 
   const isInsideMagnifier = (x: number, y: number, mag: Magnifier) => {
     if (mag.shape === "rectangle") {
-      return x >= mag.x - mag.radius && x <= mag.x + mag.radius && y >= mag.y - mag.radius && y <= mag.y + mag.radius
+      const halfWidth = mag.width / 2
+      const halfHeight = mag.height / 2
+      return x >= mag.x - halfWidth && x <= mag.x + halfWidth && y >= mag.y - halfHeight && y <= mag.y + halfHeight
     }
     const dist = Math.sqrt((x - mag.x) ** 2 + (y - mag.y) ** 2)
     return dist <= mag.radius
@@ -370,13 +395,14 @@ export function ImageMagnifierTool() {
       setMagnifiers((prev) =>
         prev.map((mag) => {
           if (mag.id === selectedMagnifier) {
-            let dist: number
             if (mag.shape === "rectangle") {
-              dist = Math.max(Math.abs(x - mag.x), Math.abs(y - mag.y))
+              const newWidth = Math.max(60, Math.min(400, (x - mag.x) * 2))
+              const newHeight = Math.max(60, Math.min(400, (y - mag.y) * 2))
+              return { ...mag, width: newWidth, height: newHeight }
             } else {
-              dist = Math.sqrt((x - mag.x) ** 2 + (y - mag.y) ** 2)
+              const dist = Math.sqrt((x - mag.x) ** 2 + (y - mag.y) ** 2)
+              return { ...mag, radius: Math.max(30, Math.min(200, dist)) }
             }
-            return { ...mag, radius: Math.max(30, Math.min(200, dist)) }
           }
           return mag
         }),
@@ -418,13 +444,14 @@ export function ImageMagnifierTool() {
       setMagnifiers((prev) =>
         prev.map((mag) => {
           if (mag.id === selectedMagnifier) {
-            let dist: number
             if (mag.shape === "rectangle") {
-              dist = Math.max(Math.abs(x - mag.x), Math.abs(y - mag.y))
+              const newWidth = Math.max(60, Math.min(400, (x - mag.x) * 2))
+              const newHeight = Math.max(60, Math.min(400, (y - mag.y) * 2))
+              return { ...mag, width: newWidth, height: newHeight }
             } else {
-              dist = Math.sqrt((x - mag.x) ** 2 + (y - mag.y) ** 2)
+              const dist = Math.sqrt((x - mag.x) ** 2 + (y - mag.y) ** 2)
+              return { ...mag, radius: Math.max(30, Math.min(200, dist)) }
             }
-            return { ...mag, radius: Math.max(30, Math.min(200, dist)) }
           }
           return mag
         }),
@@ -455,7 +482,18 @@ export function ImageMagnifierTool() {
 
   const updateSelectedShape = (shape: "circle" | "rectangle") => {
     if (!selectedMagnifier) return
-    setMagnifiers((prev) => prev.map((mag) => (mag.id === selectedMagnifier ? { ...mag, shape } : mag)))
+    setMagnifiers((prev) =>
+      prev.map((mag) => {
+        if (mag.id === selectedMagnifier) {
+          if (shape === "rectangle") {
+            return { ...mag, shape, width: mag.radius * 2, height: mag.radius * 2 }
+          } else {
+            return { ...mag, shape, radius: Math.max(mag.width, mag.height) / 2 }
+          }
+        }
+        return mag
+      }),
+    )
   }
 
   const downloadImage = () => {
@@ -475,63 +513,93 @@ export function ImageMagnifierTool() {
     magnifiers.forEach((mag) => {
       const scaledX = mag.x * scaleX
       const scaledY = mag.y * scaleY
-      const scaledRadius = mag.radius * Math.min(scaleX, scaleY)
 
-      ctx.save()
-      ctx.beginPath()
       if (mag.shape === "rectangle") {
+        const scaledWidth = mag.width * scaleX
+        const scaledHeight = mag.height * scaleY
         const cornerRadius = 8 * Math.min(scaleX, scaleY)
-        ctx.roundRect(scaledX - scaledRadius, scaledY - scaledRadius, scaledRadius * 2, scaledRadius * 2, cornerRadius)
+
+        ctx.save()
+        ctx.beginPath()
+        ctx.roundRect(scaledX - scaledWidth / 2, scaledY - scaledHeight / 2, scaledWidth, scaledHeight, cornerRadius)
+        ctx.clip()
+
+        const zoomWidth = (mag.width / 2 / mag.zoom) * scaleX
+        const zoomHeight = (mag.height / 2 / mag.zoom) * scaleY
+
+        ctx.drawImage(
+          image,
+          scaledX - zoomWidth,
+          scaledY - zoomHeight,
+          zoomWidth * 2,
+          zoomHeight * 2,
+          scaledX - scaledWidth / 2,
+          scaledY - scaledHeight / 2,
+          scaledWidth,
+          scaledHeight,
+        )
+        ctx.restore()
+
+        ctx.save()
+        ctx.beginPath()
+        ctx.roundRect(scaledX - scaledWidth / 2, scaledY - scaledHeight / 2, scaledWidth, scaledHeight, cornerRadius)
+        ctx.shadowColor = "rgba(0, 0, 0, 0.3)"
+        ctx.shadowBlur = 15 * Math.min(scaleX, scaleY)
+        ctx.shadowOffsetX = 0
+        ctx.shadowOffsetY = 4 * Math.min(scaleX, scaleY)
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.8)"
+        ctx.lineWidth = 2 * Math.min(scaleX, scaleY)
+        ctx.stroke()
+        ctx.restore()
+
+        ctx.beginPath()
+        const outerWidth = scaledWidth / 2 + 1
+        const outerHeight = scaledHeight / 2 + 1
+        ctx.roundRect(scaledX - outerWidth, scaledY - outerHeight, outerWidth * 2, outerHeight * 2, cornerRadius)
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.4)"
+        ctx.lineWidth = 1 * Math.min(scaleX, scaleY)
+        ctx.stroke()
       } else {
+        const scaledRadius = mag.radius * Math.min(scaleX, scaleY)
+
+        ctx.save()
+        ctx.beginPath()
         ctx.arc(scaledX, scaledY, scaledRadius, 0, Math.PI * 2)
-      }
-      ctx.clip()
+        ctx.clip()
 
-      const sourceX = scaledX
-      const sourceY = scaledY
-      const zoomRadius = scaledRadius / mag.zoom
+        const zoomRadius = scaledRadius / mag.zoom
 
-      ctx.drawImage(
-        image,
-        sourceX - zoomRadius,
-        sourceY - zoomRadius,
-        zoomRadius * 2,
-        zoomRadius * 2,
-        scaledX - scaledRadius,
-        scaledY - scaledRadius,
-        scaledRadius * 2,
-        scaledRadius * 2,
-      )
-      ctx.restore()
+        ctx.drawImage(
+          image,
+          scaledX - zoomRadius,
+          scaledY - zoomRadius,
+          zoomRadius * 2,
+          zoomRadius * 2,
+          scaledX - scaledRadius,
+          scaledY - scaledRadius,
+          scaledRadius * 2,
+          scaledRadius * 2,
+        )
+        ctx.restore()
 
-      ctx.save()
-      ctx.beginPath()
-      if (mag.shape === "rectangle") {
-        const cornerRadius = 8 * Math.min(scaleX, scaleY)
-        ctx.roundRect(scaledX - scaledRadius, scaledY - scaledRadius, scaledRadius * 2, scaledRadius * 2, cornerRadius)
-      } else {
+        ctx.save()
+        ctx.beginPath()
         ctx.arc(scaledX, scaledY, scaledRadius, 0, Math.PI * 2)
-      }
-      ctx.shadowColor = "rgba(0, 0, 0, 0.3)"
-      ctx.shadowBlur = 15 * Math.min(scaleX, scaleY)
-      ctx.shadowOffsetX = 0
-      ctx.shadowOffsetY = 4 * Math.min(scaleX, scaleY)
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.8)"
-      ctx.lineWidth = 2 * Math.min(scaleX, scaleY)
-      ctx.stroke()
-      ctx.restore()
+        ctx.shadowColor = "rgba(0, 0, 0, 0.3)"
+        ctx.shadowBlur = 15 * Math.min(scaleX, scaleY)
+        ctx.shadowOffsetX = 0
+        ctx.shadowOffsetY = 4 * Math.min(scaleX, scaleY)
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.8)"
+        ctx.lineWidth = 2 * Math.min(scaleX, scaleY)
+        ctx.stroke()
+        ctx.restore()
 
-      ctx.beginPath()
-      if (mag.shape === "rectangle") {
-        const cornerRadius = 8 * Math.min(scaleX, scaleY)
-        const outerRadius = scaledRadius + 1
-        ctx.roundRect(scaledX - outerRadius, scaledY - outerRadius, outerRadius * 2, outerRadius * 2, cornerRadius)
-      } else {
+        ctx.beginPath()
         ctx.arc(scaledX, scaledY, scaledRadius + 1, 0, Math.PI * 2)
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.4)"
+        ctx.lineWidth = 1 * Math.min(scaleX, scaleY)
+        ctx.stroke()
       }
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.4)"
-      ctx.lineWidth = 1 * Math.min(scaleX, scaleY)
-      ctx.stroke()
     })
 
     const link = document.createElement("a")
@@ -557,63 +625,93 @@ export function ImageMagnifierTool() {
     magnifiers.forEach((mag) => {
       const scaledX = mag.x * scaleX
       const scaledY = mag.y * scaleY
-      const scaledRadius = mag.radius * Math.min(scaleX, scaleY)
 
-      ctx.save()
-      ctx.beginPath()
       if (mag.shape === "rectangle") {
+        const scaledWidth = mag.width * scaleX
+        const scaledHeight = mag.height * scaleY
         const cornerRadius = 8 * Math.min(scaleX, scaleY)
-        ctx.roundRect(scaledX - scaledRadius, scaledY - scaledRadius, scaledRadius * 2, scaledRadius * 2, cornerRadius)
+
+        ctx.save()
+        ctx.beginPath()
+        ctx.roundRect(scaledX - scaledWidth / 2, scaledY - scaledHeight / 2, scaledWidth, scaledHeight, cornerRadius)
+        ctx.clip()
+
+        const zoomWidth = (mag.width / 2 / mag.zoom) * scaleX
+        const zoomHeight = (mag.height / 2 / mag.zoom) * scaleY
+
+        ctx.drawImage(
+          image,
+          scaledX - zoomWidth,
+          scaledY - zoomHeight,
+          zoomWidth * 2,
+          zoomHeight * 2,
+          scaledX - scaledWidth / 2,
+          scaledY - scaledHeight / 2,
+          scaledWidth,
+          scaledHeight,
+        )
+        ctx.restore()
+
+        ctx.save()
+        ctx.beginPath()
+        ctx.roundRect(scaledX - scaledWidth / 2, scaledY - scaledHeight / 2, scaledWidth, scaledHeight, cornerRadius)
+        ctx.shadowColor = "rgba(0, 0, 0, 0.3)"
+        ctx.shadowBlur = 15 * Math.min(scaleX, scaleY)
+        ctx.shadowOffsetX = 0
+        ctx.shadowOffsetY = 4 * Math.min(scaleX, scaleY)
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.8)"
+        ctx.lineWidth = 2 * Math.min(scaleX, scaleY)
+        ctx.stroke()
+        ctx.restore()
+
+        ctx.beginPath()
+        const outerWidth = scaledWidth / 2 + 1
+        const outerHeight = scaledHeight / 2 + 1
+        ctx.roundRect(scaledX - outerWidth, scaledY - outerHeight, outerWidth * 2, outerHeight * 2, cornerRadius)
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.4)"
+        ctx.lineWidth = 1 * Math.min(scaleX, scaleY)
+        ctx.stroke()
       } else {
+        const scaledRadius = mag.radius * Math.min(scaleX, scaleY)
+
+        ctx.save()
+        ctx.beginPath()
         ctx.arc(scaledX, scaledY, scaledRadius, 0, Math.PI * 2)
-      }
-      ctx.clip()
+        ctx.clip()
 
-      const sourceX = scaledX
-      const sourceY = scaledY
-      const zoomRadius = scaledRadius / mag.zoom
+        const zoomRadius = scaledRadius / mag.zoom
 
-      ctx.drawImage(
-        image,
-        sourceX - zoomRadius,
-        sourceY - zoomRadius,
-        zoomRadius * 2,
-        zoomRadius * 2,
-        scaledX - scaledRadius,
-        scaledY - scaledRadius,
-        scaledRadius * 2,
-        scaledRadius * 2,
-      )
-      ctx.restore()
+        ctx.drawImage(
+          image,
+          scaledX - zoomRadius,
+          scaledY - zoomRadius,
+          zoomRadius * 2,
+          zoomRadius * 2,
+          scaledX - scaledRadius,
+          scaledY - scaledRadius,
+          scaledRadius * 2,
+          scaledRadius * 2,
+        )
+        ctx.restore()
 
-      ctx.save()
-      ctx.beginPath()
-      if (mag.shape === "rectangle") {
-        const cornerRadius = 8 * Math.min(scaleX, scaleY)
-        ctx.roundRect(scaledX - scaledRadius, scaledY - scaledRadius, scaledRadius * 2, scaledRadius * 2, cornerRadius)
-      } else {
+        ctx.save()
+        ctx.beginPath()
         ctx.arc(scaledX, scaledY, scaledRadius, 0, Math.PI * 2)
-      }
-      ctx.shadowColor = "rgba(0, 0, 0, 0.3)"
-      ctx.shadowBlur = 15 * Math.min(scaleX, scaleY)
-      ctx.shadowOffsetX = 0
-      ctx.shadowOffsetY = 4 * Math.min(scaleX, scaleY)
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.8)"
-      ctx.lineWidth = 2 * Math.min(scaleX, scaleY)
-      ctx.stroke()
-      ctx.restore()
+        ctx.shadowColor = "rgba(0, 0, 0, 0.3)"
+        ctx.shadowBlur = 15 * Math.min(scaleX, scaleY)
+        ctx.shadowOffsetX = 0
+        ctx.shadowOffsetY = 4 * Math.min(scaleX, scaleY)
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.8)"
+        ctx.lineWidth = 2 * Math.min(scaleX, scaleY)
+        ctx.stroke()
+        ctx.restore()
 
-      ctx.beginPath()
-      if (mag.shape === "rectangle") {
-        const cornerRadius = 8 * Math.min(scaleX, scaleY)
-        const outerRadius = scaledRadius + 1
-        ctx.roundRect(scaledX - outerRadius, scaledY - outerRadius, outerRadius * 2, outerRadius * 2, cornerRadius)
-      } else {
+        ctx.beginPath()
         ctx.arc(scaledX, scaledY, scaledRadius + 1, 0, Math.PI * 2)
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.4)"
+        ctx.lineWidth = 1 * Math.min(scaleX, scaleY)
+        ctx.stroke()
       }
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.4)"
-      ctx.lineWidth = 1 * Math.min(scaleX, scaleY)
-      ctx.stroke()
     })
 
     try {
@@ -643,7 +741,10 @@ export function ImageMagnifierTool() {
     return {
       x: mag.x * scaleX,
       y: mag.y * scaleY,
-      radius: mag.radius * Math.min(scaleX, scaleY),
+      radius:
+        mag.shape === "rectangle"
+          ? (Math.max(mag.width, mag.height) / 2) * Math.min(scaleX, scaleY)
+          : mag.radius * Math.min(scaleX, scaleY),
     }
   }
 
