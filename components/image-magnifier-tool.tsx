@@ -841,11 +841,11 @@ export function ImageMagnifierTool() {
             <div className="flex gap-2 mb-3">
               <Button onClick={() => addMagnifier("circle")} size="sm" className="flex-1 gap-1.5 h-8 text-xs">
                 <Circle className="h-3.5 w-3.5" />
-                New Circle
+                Circle
               </Button>
               <Button onClick={() => addMagnifier("rectangle")} size="sm" className="flex-1 gap-1.5 h-8 text-xs">
                 <Square className="h-3.5 w-3.5" />
-                New Rectangle
+                Rectangle
               </Button>
             </div>
 
