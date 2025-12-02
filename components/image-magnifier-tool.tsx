@@ -1019,7 +1019,7 @@ export function ImageMagnifierTool() {
                   }}
                 >
                   <div
-                    className="bg-white/70 backdrop-blur-sm rounded-full p-1.5 flex items-center gap-2"
+                    className="bg-white/70 backdrop-blur-sm rounded-full p-1.5 flex items-center gap-1.5"
                     style={{
                       width: "180px",
                       boxShadow: "0 2px 8px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.05)",
