@@ -174,24 +174,6 @@ export function ImageMagnifierTool() {
       ctx.stroke()
 
       if (selectedMagnifier === mag.id) {
-        let handleX: number, handleY: number
-        if (mag.shape === "rectangle") {
-          handleX = mag.x + mag.width / 2
-          handleY = mag.y + mag.height / 2
-        } else {
-          handleX = mag.x + mag.radius * Math.cos(Math.PI / 4)
-          handleY = mag.y + mag.radius * Math.sin(Math.PI / 4)
-        }
-        ctx.beginPath()
-        ctx.arc(handleX, handleY, 8, 0, Math.PI * 2)
-        ctx.fillStyle = "#3b82f6"
-        ctx.fill()
-        ctx.strokeStyle = "#ffffff"
-        ctx.lineWidth = 2
-        ctx.stroke()
-      }
-
-      if (selectedMagnifier === mag.id) {
         ctx.save()
         ctx.beginPath()
         if (mag.shape === "rectangle") {
@@ -202,9 +184,26 @@ export function ImageMagnifierTool() {
           ctx.arc(mag.x, mag.y, mag.radius + 4, 0, Math.PI * 2)
         }
         ctx.strokeStyle = "#3b82f6"
-        ctx.lineWidth = 2
+        ctx.lineWidth = 3
         ctx.stroke()
         ctx.restore()
+
+        let handleX: number, handleY: number
+        if (mag.shape === "rectangle") {
+          handleX = mag.x + mag.width / 2 + 4
+          handleY = mag.y + mag.height / 2 + 4
+        } else {
+          const outlineRadius = mag.radius + 4
+          handleX = mag.x + outlineRadius * Math.cos(Math.PI / 4)
+          handleY = mag.y + outlineRadius * Math.sin(Math.PI / 4)
+        }
+        ctx.beginPath()
+        ctx.arc(handleX, handleY, 8, 0, Math.PI * 2)
+        ctx.fillStyle = "#3b82f6"
+        ctx.fill()
+        ctx.strokeStyle = "#ffffff"
+        ctx.lineWidth = 2
+        ctx.stroke()
       }
     })
   }, [image, magnifiers, selectedMagnifier, canvasDisplaySize])
@@ -340,11 +339,12 @@ export function ImageMagnifierTool() {
   const isOnResizeHandle = (x: number, y: number, mag: Magnifier) => {
     let handleX: number, handleY: number
     if (mag.shape === "rectangle") {
-      handleX = mag.x + mag.width / 2
-      handleY = mag.y + mag.height / 2
+      handleX = mag.x + mag.width / 2 + 4
+      handleY = mag.y + mag.height / 2 + 4
     } else {
-      handleX = mag.x + mag.radius * Math.cos(Math.PI / 4)
-      handleY = mag.y + mag.radius * Math.sin(Math.PI / 4)
+      const outlineRadius = mag.radius + 4
+      handleX = mag.x + outlineRadius * Math.cos(Math.PI / 4)
+      handleY = mag.y + outlineRadius * Math.sin(Math.PI / 4)
     }
     const dist = Math.sqrt((x - handleX) ** 2 + (y - handleY) ** 2)
     return dist <= 12
@@ -975,13 +975,15 @@ export function ImageMagnifierTool() {
               const pos = getMagnifierScreenPosition(mag)
               const isSelected = selectedMagnifier === mag.id
               if (!isSelected) return null
+              const scale = window.devicePixelRatio || 1
+              const offsetY = mag.shape === "rectangle" ? (mag.height / 2) * scale : pos.radius
               return (
                 <div
                   key={mag.id}
                   className="absolute pointer-events-none"
                   style={{
                     left: pos.x,
-                    top: pos.y - pos.radius - 48,
+                    top: pos.y - offsetY - 48,
                     transform: "translateX(-50%)",
                   }}
                 >
