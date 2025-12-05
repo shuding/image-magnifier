@@ -1,12 +1,98 @@
 "use client"
 
 import type React from "react"
-import { useState, useRef, useEffect, useCallback } from "react"
+import {
+  useState,
+  useRef,
+  useEffect,
+  useCallback,
+  useTransition, // Add useTransition import
+} from "react"
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 import { Upload, Circle, Square, Copy, Download, Trash2, Sun, Moon, Check, EyeOff, Grid3X3, Waves } from "lucide-react"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { stackBlurCanvas } from "@/lib/stackblur"
+
+// Helper function to apply Gaussian blur to ImageData
+const applyGaussianBlur = (imageData: ImageData, radius: number) => {
+  const { data } = imageData
+  const width = imageData.width
+  const height = imageData.height
+
+  const blurRadius = Math.min(Math.round(radius), 254)
+  const sigma = blurRadius * 0.5 // Approximation for stackblur to Gaussian
+  const diameter = Math.ceil(blurRadius * 2)
+  const kernelSize = diameter + 1
+  const halfKernelSize = Math.floor(kernelSize / 2)
+
+  // Pre-calculate Gaussian kernel weights
+  const kernel: number[] = []
+  let kernelSum = 0
+  for (let i = 0; i < kernelSize; i++) {
+    const x = i - halfKernelSize
+    const weight = Math.exp(-(x * x) / (2 * sigma * sigma))
+    kernel.push(weight)
+    kernelSum += weight
+  }
+
+  // Normalize kernel weights
+  for (let i = 0; i < kernelSize; i++) {
+    kernel[i] /= kernelSum
+  }
+
+  const tempData = new Uint8ClampedArray(data)
+
+  // Apply horizontal blur
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let r = 0,
+        g = 0,
+        b = 0,
+        a = 0
+      for (let k = 0; k < kernelSize; k++) {
+        const sampleX = x + k - halfKernelSize
+        if (sampleX >= 0 && sampleX < width) {
+          const index = (y * width + sampleX) * 4
+          r += tempData[index] * kernel[k]
+          g += tempData[index + 1] * kernel[k]
+          b += tempData[index + 2] * kernel[k]
+          a += tempData[index + 3] * kernel[k]
+        }
+      }
+      const index = (y * width + x) * 4
+      data[index] = r
+      data[index + 1] = g
+      data[index + 2] = b
+      data[index + 3] = a
+    }
+  }
+
+  // Apply vertical blur
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let r = 0,
+        g = 0,
+        b = 0,
+        a = 0
+      for (let k = 0; k < kernelSize; k++) {
+        const sampleY = y + k - halfKernelSize
+        if (sampleY >= 0 && sampleY < height) {
+          const index = (sampleY * width + x) * 4
+          r += data[index] * kernel[k]
+          g += data[index + 1] * kernel[k]
+          b += data[index + 2] * kernel[k]
+          a += data[index + 3] * kernel[k]
+        }
+      }
+      const index = (y * width + x) * 4
+      data[index] = r
+      data[index + 1] = g
+      data[index + 2] = b
+      data[index + 3] = a
+    }
+  }
+}
 
 function drawImageWithEdgeExtension(
   tempCtx: CanvasRenderingContext2D,
@@ -115,10 +201,10 @@ export function ImageMagnifierTool() {
     shape: "circle" | "rectangle"
   } | null>(null)
   const [darkBorder, setDarkBorder] = useState(false)
+  const [selectedBorderColor, setSelectedBorderColor] = useState<string>("#3B82F6")
 
-  const blurCacheRef = useRef<Map<string, ImageData>>(new Map())
-  const isInteractingRef = useRef(false)
-  const lastDrawTimeRef = useRef(0)
+  const [isPending, startTransition] = useTransition()
+  // Remove: blurCacheRef, isInteractingRef, lastDrawTimeRef
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -160,35 +246,9 @@ export function ImageMagnifierTool() {
     }
   }, [selectedAnnotation])
 
-  useEffect(() => {
-    const currentIds = new Set(annotations.map((a) => a.id))
-    for (const key of blurCacheRef.current.keys()) {
-      const id = key.split("-")[0]
-      if (!currentIds.has(id)) {
-        blurCacheRef.current.delete(key)
-      }
-    }
-  }, [annotations])
-
-  const getCachedBlur = useCallback(
-    (ann: Annotation, forceRecalculate = false): ImageData | null => {
+  const calculateBlur = useCallback(
+    (ann: Annotation): ImageData | null => {
       if (ann.type !== "blur" || !image) return null
-
-      const cacheKey = `${ann.id}-${ann.blurAmount}-${ann.blurType}-${Math.round(ann.width)}-${Math.round(ann.height)}-${Math.round(ann.radius)}`
-
-      if (!forceRecalculate && blurCacheRef.current.has(cacheKey)) {
-        return blurCacheRef.current.get(cacheKey)!
-      }
-
-      // Don't calculate expensive blur during active interaction
-      if (isInteractingRef.current && blurCacheRef.current.size > 0) {
-        // Return any existing cache for this annotation
-        for (const [key, value] of blurCacheRef.current.entries()) {
-          if (key.startsWith(ann.id)) {
-            return value
-          }
-        }
-      }
 
       const tempCanvas = document.createElement("canvas")
       const tempCtx = tempCanvas.getContext("2d", { willReadFrequently: true })
@@ -199,74 +259,56 @@ export function ImageMagnifierTool() {
 
       const scaleX = image.naturalWidth / canvasDisplaySize.width
       const scaleY = image.naturalHeight / canvasDisplaySize.height
-      const sourceX = ann.x * scaleX
-      const sourceY = ann.y * scaleY
 
       if (ann.shape === "rectangle") {
         const regionWidth = Math.ceil(ann.width)
         const regionHeight = Math.ceil(ann.height)
         const paddedWidth = regionWidth + padding * 2
         const paddedHeight = regionHeight + padding * 2
+
         tempCanvas.width = paddedWidth
         tempCanvas.height = paddedHeight
 
-        const srcX = sourceX - (ann.width / 2) * scaleX
-        const srcY = sourceY - (ann.height / 2) * scaleY
-        const srcW = ann.width * scaleX
-        const srcH = ann.height * scaleY
-        const paddingInImageX = padding * scaleX
-        const paddingInImageY = padding * scaleY
+        const srcX = (ann.x - ann.width / 2) * scaleX - padding * scaleX
+        const srcY = (ann.y - ann.height / 2) * scaleY - padding * scaleY
+        const srcW = paddedWidth * scaleX
+        const srcH = paddedHeight * scaleY
 
-        drawImageWithEdgeExtension(
-          tempCtx,
-          image,
-          srcX - paddingInImageX,
-          srcY - paddingInImageY,
-          srcW + paddingInImageX * 2,
-          srcH + paddingInImageY * 2,
-          paddedWidth,
-          paddedHeight,
-        )
+        drawImageWithEdgeExtension(tempCtx, image, srcX, srcY, srcW, srcH, paddedWidth, paddedHeight)
+
+        const imageData = tempCtx.getImageData(0, 0, paddedWidth, paddedHeight)
+
+        if (ann.blurType === "mosaic") {
+          applyMosaic(imageData, Math.max(8, Math.floor(blurRadius / 2)))
+        } else {
+          applyGaussianBlur(imageData, blurRadius)
+        }
+
+        return imageData
       } else {
-        const regionSize = Math.ceil(ann.radius * 2)
-        const paddedSize = regionSize + padding * 2
+        const diameter = Math.ceil(ann.radius * 2)
+        const paddedSize = diameter + padding * 2
+
         tempCanvas.width = paddedSize
         tempCanvas.height = paddedSize
 
-        const srcX = sourceX - ann.radius * scaleX
-        const srcY = sourceY - ann.radius * scaleY
-        const srcSize = ann.radius * 2 * scaleX
-        const paddingInImage = padding * scaleX
+        const srcX = (ann.x - ann.radius) * scaleX - padding * scaleX
+        const srcY = (ann.y - ann.radius) * scaleY - padding * scaleY
+        const srcW = paddedSize * scaleX
+        const srcH = paddedSize * scaleY
 
-        drawImageWithEdgeExtension(
-          tempCtx,
-          image,
-          srcX - paddingInImage,
-          srcY - paddingInImage,
-          srcSize + paddingInImage * 2,
-          srcSize + paddingInImage * 2,
-          paddedSize,
-          paddedSize,
-        )
-      }
+        drawImageWithEdgeExtension(tempCtx, image, srcX, srcY, srcW, srcH, paddedSize, paddedSize)
 
-      if (ann.blurType === "mosaic") {
-        applyMosaic(tempCtx, tempCanvas.width, tempCanvas.height, Math.max(4, Math.floor(blurRadius / 2)))
-      } else {
-        stackBlurCanvas(tempCanvas, 0, 0, tempCanvas.width, tempCanvas.height, blurRadius)
-      }
+        const imageData = tempCtx.getImageData(0, 0, paddedSize, paddedSize)
 
-      const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height)
-
-      // Clear old caches for this annotation and store new one
-      for (const key of blurCacheRef.current.keys()) {
-        if (key.startsWith(ann.id)) {
-          blurCacheRef.current.delete(key)
+        if (ann.blurType === "mosaic") {
+          applyMosaic(imageData, Math.max(8, Math.floor(blurRadius / 2)))
+        } else {
+          applyGaussianBlur(imageData, blurRadius)
         }
-      }
-      blurCacheRef.current.set(cacheKey, imageData)
 
-      return imageData
+        return imageData
+      }
     },
     [image, canvasDisplaySize],
   )
@@ -277,13 +319,6 @@ export function ImageMagnifierTool() {
 
     const ctx = canvas.getContext("2d")
     if (!ctx) return
-
-    const now = performance.now()
-    if (isInteractingRef.current && now - lastDrawTimeRef.current < 16) {
-      requestAnimationFrame(drawCanvas)
-      return
-    }
-    lastDrawTimeRef.current = now
 
     const dpr = window.devicePixelRatio || 1
 
@@ -313,111 +348,40 @@ export function ImageMagnifierTool() {
         const blurRadius = Math.min(Math.round(ann.blurAmount), 40)
         const padding = blurRadius * 2
 
-        // During interaction, use a simple pixelated preview instead of expensive blur
-        if (isInteractingRef.current) {
-          // Draw pixelated low-res version as preview
-          const previewCanvas = document.createElement("canvas")
-          const previewCtx = previewCanvas.getContext("2d")
-          if (previewCtx) {
-            const pixelSize = Math.max(4, Math.floor(blurRadius / 3))
+        const blurredData = calculateBlur(ann)
+
+        if (blurredData) {
+          const tempCanvas = document.createElement("canvas")
+          tempCanvas.width = blurredData.width
+          tempCanvas.height = blurredData.height
+          const tempCtx = tempCanvas.getContext("2d")
+          if (tempCtx) {
+            tempCtx.putImageData(blurredData, 0, 0)
 
             if (ann.shape === "rectangle") {
-              const regionWidth = Math.ceil(ann.width)
-              const regionHeight = Math.ceil(ann.height)
-              const smallWidth = Math.ceil(regionWidth / pixelSize)
-              const smallHeight = Math.ceil(regionHeight / pixelSize)
-
-              previewCanvas.width = smallWidth
-              previewCanvas.height = smallHeight
-
-              const srcX = sourceX - (ann.width / 2) * scaleX
-              const srcY = sourceY - (ann.height / 2) * scaleY
-              const srcW = ann.width * scaleX
-              const srcH = ann.height * scaleY
-
-              previewCtx.drawImage(image, srcX, srcY, srcW, srcH, 0, 0, smallWidth, smallHeight)
-
-              ctx.imageSmoothingEnabled = false
               ctx.drawImage(
-                previewCanvas,
-                0,
-                0,
-                smallWidth,
-                smallHeight,
+                tempCanvas,
+                padding,
+                padding,
+                ann.width,
+                ann.height,
                 ann.x - ann.width / 2,
                 ann.y - ann.height / 2,
                 ann.width,
                 ann.height,
               )
-              ctx.imageSmoothingEnabled = true
             } else {
-              const regionSize = Math.ceil(ann.radius * 2)
-              const smallSize = Math.ceil(regionSize / pixelSize)
-
-              previewCanvas.width = smallSize
-              previewCanvas.height = smallSize
-
-              const srcX = sourceX - ann.radius * scaleX
-              const srcY = sourceY - ann.radius * scaleY
-              const srcSize = ann.radius * 2 * scaleX
-
-              previewCtx.drawImage(image, srcX, srcY, srcSize, srcSize, 0, 0, smallSize, smallSize)
-
-              ctx.imageSmoothingEnabled = false
               ctx.drawImage(
-                previewCanvas,
-                0,
-                0,
-                smallSize,
-                smallSize,
+                tempCanvas,
+                padding,
+                padding,
+                ann.radius * 2,
+                ann.radius * 2,
                 ann.x - ann.radius,
                 ann.y - ann.radius,
                 ann.radius * 2,
                 ann.radius * 2,
               )
-              ctx.imageSmoothingEnabled = true
-            }
-          }
-        } else {
-          // Not interacting - use full quality cached blur
-          const cachedBlur = getCachedBlur(ann)
-
-          if (cachedBlur) {
-            const tempCanvas = document.createElement("canvas")
-            tempCanvas.width = cachedBlur.width
-            tempCanvas.height = cachedBlur.height
-            const tempCtx = tempCanvas.getContext("2d")
-            if (tempCtx) {
-              tempCtx.putImageData(cachedBlur, 0, 0)
-
-              if (ann.shape === "rectangle") {
-                const regionWidth = Math.ceil(ann.width)
-                const regionHeight = Math.ceil(ann.height)
-                ctx.drawImage(
-                  tempCanvas,
-                  padding,
-                  padding,
-                  regionWidth,
-                  regionHeight,
-                  ann.x - ann.width / 2,
-                  ann.y - ann.height / 2,
-                  ann.width,
-                  ann.height,
-                )
-              } else {
-                const regionSize = Math.ceil(ann.radius * 2)
-                ctx.drawImage(
-                  tempCanvas,
-                  padding,
-                  padding,
-                  regionSize,
-                  regionSize,
-                  ann.x - ann.radius,
-                  ann.y - ann.radius,
-                  ann.radius * 2,
-                  ann.radius * 2,
-                )
-              }
             }
           }
         }
@@ -521,7 +485,7 @@ export function ImageMagnifierTool() {
         ctx.stroke()
       }
     })
-  }, [image, annotations, selectedAnnotation, canvasDisplaySize, getCachedBlur])
+  }, [image, annotations, canvasDisplaySize, selectedAnnotation, calculateBlur])
 
   useEffect(() => {
     drawCanvas()
@@ -629,9 +593,10 @@ export function ImageMagnifierTool() {
     setSelectedAnnotation(newAnnotation.id)
   }
 
-  const applyMosaic = (ctx: CanvasRenderingContext2D, width: number, height: number, blockSize: number) => {
-    const imageData = ctx.getImageData(0, 0, width, height)
-    const data = imageData.data
+  const applyMosaic = (imageData: ImageData, blockSize: number) => {
+    const { data } = imageData
+    const width = imageData.width
+    const height = imageData.height
 
     for (let y = 0; y < height; y += blockSize) {
       for (let x = 0; x < width; x += blockSize) {
@@ -670,8 +635,7 @@ export function ImageMagnifierTool() {
         }
       }
     }
-
-    ctx.putImageData(imageData, 0, 0)
+    // No need to put back into context, it modifies imageData directly
   }
 
   const getCanvasCoords = (e: React.MouseEvent) => {
@@ -723,14 +687,18 @@ export function ImageMagnifierTool() {
     return dist <= ann.radius
   }
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-    const { x, y } = getCanvasCoords(e)
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    const rect = canvas.getBoundingClientRect()
+    const x = e.clientX - rect.left
+    const y = e.clientY - rect.top
 
     if (selectedAnnotation) {
       const selected = annotations.find((m) => m.id === selectedAnnotation)
       if (selected && isOnResizeHandle(x, y, selected)) {
         setIsResizing(true)
-        isInteractingRef.current = true // Mark interaction start
         setDragState({
           x,
           y,
@@ -750,7 +718,6 @@ export function ImageMagnifierTool() {
       if (isInsideAnnotation(x, y, ann)) {
         setSelectedAnnotation(ann.id)
         setIsDragging(true)
-        isInteractingRef.current = true // Mark interaction start
         setDragOffset({ x: x - ann.x, y: y - ann.y })
         setDragState({
           x,
@@ -769,7 +736,7 @@ export function ImageMagnifierTool() {
     setSelectedAnnotation(null)
   }
 
-  const handleTouchStart = (e: React.TouchEvent) => {
+  const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
     if (e.touches.length !== 1) return
     const { x, y } = getTouchCoords(e)
 
@@ -777,7 +744,6 @@ export function ImageMagnifierTool() {
       const selected = annotations.find((m) => m.id === selectedAnnotation)
       if (selected && isOnResizeHandle(x, y, selected)) {
         setIsResizing(true)
-        isInteractingRef.current = true // Mark interaction start
         setDragState({
           x,
           y,
@@ -798,7 +764,6 @@ export function ImageMagnifierTool() {
       if (isInsideAnnotation(x, y, ann)) {
         setSelectedAnnotation(ann.id)
         setIsDragging(true)
-        isInteractingRef.current = true // Mark interaction start
         setDragOffset({ x: x - ann.x, y: y - ann.y })
         setDragState({
           x,
@@ -818,35 +783,48 @@ export function ImageMagnifierTool() {
     setSelectedAnnotation(null)
   }
 
-  const handleMouseMove = (e: React.MouseEvent) => {
-    const { x, y } = getCanvasCoords(e)
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    const rect = canvas.getBoundingClientRect()
+    const x = e.clientX - rect.left
+    const y = e.clientY - rect.top
 
     if (isDragging && selectedAnnotation) {
-      setAnnotations((prev) =>
-        prev.map((ann) => (ann.id === selectedAnnotation ? { ...ann, x: x - dragOffset.x, y: y - dragOffset.y } : ann)),
-      )
-    }
+      startTransition(() => {
+        setAnnotations((prev) =>
+          prev.map((ann) =>
+            ann.id === selectedAnnotation
+              ? {
+                  ...ann,
+                  x: Math.max(0, Math.min(canvasDisplaySize.width, x - dragOffset.x)),
+                  y: Math.max(0, Math.min(canvasDisplaySize.height, y - dragOffset.y)),
+                }
+              : ann,
+          ),
+        )
+      })
+    } else if (isResizing && selectedAnnotation && dragState) {
+      startTransition(() => {
+        setAnnotations((prev) =>
+          prev.map((ann) => {
+            if (ann.id !== selectedAnnotation) return ann
 
-    if (isResizing && selectedAnnotation && dragState) {
-      setAnnotations((prev) =>
-        prev.map((ann) => {
-          if (ann.id === selectedAnnotation) {
             if (ann.shape === "rectangle") {
-              const newWidth = Math.max(60, Math.min(400, (x - dragState.initialX) * 2))
-              const newHeight = Math.max(60, Math.min(400, (y - dragState.initialY) * 2))
+              const dx = x - dragState.x
+              const dy = y - dragState.y
+              const newWidth = Math.max(50, dragState.initialWidth + dx * 2)
+              const newHeight = Math.max(50, dragState.initialHeight + dy * 2)
               return { ...ann, width: newWidth, height: newHeight }
             } else {
-              const dist = Math.sqrt((x - dragState.initialX) ** 2 + (y - dragState.initialY) ** 2)
-              return { ...ann, radius: Math.max(30, Math.min(200, dist)) }
+              const newRadius = Math.max(25, Math.hypot(x - ann.x, y - ann.y))
+              return { ...ann, radius: newRadius }
             }
-          }
-          return ann
-        }),
-      )
-    }
-
-    const canvas = canvasRef.current
-    if (canvas) {
+          }),
+        )
+      })
+    } else {
       let cursor = "default"
       if (selectedAnnotation) {
         const selected = annotations.find((m) => m.id === selectedAnnotation)
@@ -864,71 +842,64 @@ export function ImageMagnifierTool() {
     }
   }
 
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (e.touches.length !== 1) return
-    const { x, y } = getTouchCoords(e)
+  const handleTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (!isDragging && !isResizing) return
+    e.preventDefault()
+
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    const rect = canvas.getBoundingClientRect()
+    const touch = e.touches[0]
+    const x = touch.clientX - rect.left
+    const y = touch.clientY - rect.top
 
     if (isDragging && selectedAnnotation) {
-      e.preventDefault()
-      setAnnotations((prev) =>
-        prev.map((ann) => (ann.id === selectedAnnotation ? { ...ann, x: x - dragOffset.x, y: y - dragOffset.y } : ann)),
-      )
-    }
+      startTransition(() => {
+        setAnnotations((prev) =>
+          prev.map((ann) =>
+            ann.id === selectedAnnotation
+              ? {
+                  ...ann,
+                  x: Math.max(0, Math.min(canvasDisplaySize.width, x - dragOffset.x)),
+                  y: Math.max(0, Math.min(canvasDisplaySize.height, y - dragOffset.y)),
+                }
+              : ann,
+          ),
+        )
+      })
+    } else if (isResizing && selectedAnnotation && dragState) {
+      startTransition(() => {
+        setAnnotations((prev) =>
+          prev.map((ann) => {
+            if (ann.id !== selectedAnnotation) return ann
 
-    if (isResizing && selectedAnnotation && dragState) {
-      e.preventDefault()
-      setAnnotations((prev) =>
-        prev.map((ann) => {
-          if (ann.id === selectedAnnotation) {
             if (ann.shape === "rectangle") {
-              const newWidth = Math.max(60, Math.min(400, (x - dragState.initialX) * 2))
-              const newHeight = Math.max(60, Math.min(400, (y - dragState.initialY) * 2))
+              const dx = x - dragState.x
+              const dy = y - dragState.y
+              const newWidth = Math.max(50, dragState.initialWidth + dx * 2)
+              const newHeight = Math.max(50, dragState.initialHeight + dy * 2)
               return { ...ann, width: newWidth, height: newHeight }
             } else {
-              const dist = Math.sqrt((x - dragState.initialX) ** 2 + (y - dragState.initialY) ** 2)
-              return { ...ann, radius: Math.max(30, Math.min(200, dist)) }
+              const newRadius = Math.max(25, Math.hypot(x - ann.x, y - ann.y))
+              return { ...ann, radius: newRadius }
             }
-          }
-          return ann
-        }),
-      )
+          }),
+        )
+      })
     }
   }
 
   const handleMouseUp = () => {
-    const wasInteracting = isInteractingRef.current
-    isInteractingRef.current = false
     setIsDragging(false)
     setIsResizing(false)
     setDragState(null)
-
-    // Force recalculate blur caches after interaction ends
-    if (wasInteracting) {
-      annotations.forEach((ann) => {
-        if (ann.type === "blur") {
-          getCachedBlur(ann, true)
-        }
-      })
-      requestAnimationFrame(drawCanvas)
-    }
   }
 
   const handleTouchEnd = () => {
-    const wasInteracting = isInteractingRef.current
-    isInteractingRef.current = false
     setIsDragging(false)
     setIsResizing(false)
     setDragState(null)
-
-    // Force recalculate blur caches after interaction ends
-    if (wasInteracting) {
-      annotations.forEach((ann) => {
-        if (ann.type === "blur") {
-          getCachedBlur(ann, true)
-        }
-      })
-      requestAnimationFrame(drawCanvas)
-    }
   }
 
   const downloadImage = useCallback(async () => {
@@ -1003,21 +974,13 @@ export function ImageMagnifierTool() {
 
             // Apply blur or mosaic based on blurType
             if (ann.blurType === "mosaic") {
-              applyMosaic(tempCtx, paddedWidth, paddedHeight, Math.max(4, Math.floor(blurRadius / 2)))
+              applyMosaic(
+                tempCtx.getImageData(0, 0, paddedWidth, paddedHeight),
+                Math.max(4, Math.floor(blurRadius / 2)),
+              )
+              tempCtx.putImageData(tempCtx.getImageData(0, 0, paddedWidth, paddedHeight), 0, 0)
             } else {
               stackBlurCanvas(tempCanvas, 0, 0, paddedWidth, paddedHeight, blurRadius)
-            }
-
-            const debugCtx = tempCanvas.getContext("2d")
-            if (debugCtx) {
-              const debugData = debugCtx.getImageData(padding, padding, 10, 10)
-              console.log(
-                "[v0] after blur sample pixels:",
-                debugData.data[0],
-                debugData.data[1],
-                debugData.data[2],
-                debugData.data[3],
-              )
             }
 
             ctx.drawImage(
@@ -1053,21 +1016,10 @@ export function ImageMagnifierTool() {
 
             // Apply blur or mosaic based on blurType
             if (ann.blurType === "mosaic") {
-              applyMosaic(tempCtx, paddedSize, paddedSize, Math.max(4, Math.floor(blurRadius / 2)))
+              applyMosaic(tempCtx.getImageData(0, 0, paddedSize, paddedSize), Math.max(4, Math.floor(blurRadius / 2)))
+              tempCtx.putImageData(tempCtx.getImageData(0, 0, paddedSize, paddedSize), 0, 0)
             } else {
               stackBlurCanvas(tempCanvas, 0, 0, paddedSize, paddedSize, blurRadius)
-            }
-
-            const debugCtx = tempCanvas.getContext("2d")
-            if (debugCtx) {
-              const debugData = debugCtx.getImageData(padding, padding, 10, 10)
-              console.log(
-                "[v0] after blur sample pixels:",
-                debugData.data[0],
-                debugData.data[1],
-                debugData.data[2],
-                debugData.data[3],
-              )
             }
 
             ctx.drawImage(
@@ -1236,21 +1188,13 @@ export function ImageMagnifierTool() {
 
             // Apply blur or mosaic based on blurType
             if (ann.blurType === "mosaic") {
-              applyMosaic(tempCtx, paddedWidth, paddedHeight, Math.max(4, Math.floor(blurRadius / 2)))
+              applyMosaic(
+                tempCtx.getImageData(0, 0, paddedWidth, paddedHeight),
+                Math.max(4, Math.floor(blurRadius / 2)),
+              )
+              tempCtx.putImageData(tempCtx.getImageData(0, 0, paddedWidth, paddedHeight), 0, 0)
             } else {
               stackBlurCanvas(tempCanvas, 0, 0, paddedWidth, paddedHeight, blurRadius)
-            }
-
-            const debugCtx = tempCanvas.getContext("2d")
-            if (debugCtx) {
-              const debugData = debugCtx.getImageData(padding, padding, 10, 10)
-              console.log(
-                "[v0] after blur sample pixels:",
-                debugData.data[0],
-                debugData.data[1],
-                debugData.data[2],
-                debugData.data[3],
-              )
             }
 
             ctx.drawImage(
@@ -1286,21 +1230,10 @@ export function ImageMagnifierTool() {
 
             // Apply blur or mosaic based on blurType
             if (ann.blurType === "mosaic") {
-              applyMosaic(tempCtx, paddedSize, paddedSize, Math.max(4, Math.floor(blurRadius / 2)))
+              applyMosaic(tempCtx.getImageData(0, 0, paddedSize, paddedSize), Math.max(4, Math.floor(blurRadius / 2)))
+              tempCtx.putImageData(tempCtx.getImageData(0, 0, paddedSize, paddedSize), 0, 0)
             } else {
               stackBlurCanvas(tempCanvas, 0, 0, paddedSize, paddedSize, blurRadius)
-            }
-
-            const debugCtx = tempCanvas.getContext("2d")
-            if (debugCtx) {
-              const debugData = debugCtx.getImageData(padding, padding, 10, 10)
-              console.log(
-                "[v0] after blur sample pixels:",
-                debugData.data[0],
-                debugData.data[1],
-                debugData.data[2],
-                debugData.data[3],
-              )
             }
 
             ctx.drawImage(
@@ -1431,11 +1364,12 @@ export function ImageMagnifierTool() {
     (id: string) => {
       const ann = annotations.find((a) => a.id === id)
       if (ann && ann.type === "blur") {
-        getCachedBlur(ann, true)
-        requestAnimationFrame(drawCanvas)
+        // Force recalculate blur directly
+        // (No cache to invalidate anymore)
+        drawCanvas()
       }
     },
-    [annotations, getCachedBlur, drawCanvas],
+    [annotations, drawCanvas],
   )
 
   return (
@@ -1625,20 +1559,24 @@ export function ImageMagnifierTool() {
                   >
                     {ann.type === "blur" ? (
                       <>
+                        {/* Update slider onValueChange to use startTransition */}
                         <Slider
-                          value={[ann.blurAmount]}
                           min={1}
-                          max={30}
+                          max={40}
                           step={1}
-                          className="w-24"
+                          value={[ann.blurAmount]}
                           onValueChange={(value) => {
-                            isInteractingRef.current = true
-                            handleBlurAmountChange(ann.id, value[0])
+                            startTransition(() => {
+                              setAnnotations((prev) =>
+                                prev.map((a) => (a.id === ann.id ? { ...a, blurAmount: value[0] } : a)),
+                              )
+                            })
                           }}
-                          onValueCommit={(value) => {
-                            isInteractingRef.current = false
-                            handleBlurAmountChangeEnd(ann.id)
+                          onValueCommit={() => {
+                            // Trigger redraw after commit
+                            drawCanvas()
                           }}
+                          className="w-24"
                         />
                         <span className="text-xs text-muted-foreground w-8">{ann.blurAmount}px</span>
 
@@ -1648,24 +1586,8 @@ export function ImageMagnifierTool() {
                           <TooltipTrigger asChild>
                             <Button
                               onClick={() => {
-                                setAnnotations((prev) =>
-                                  prev.map((m) =>
-                                    m.id === ann.id
-                                      ? { ...m, blurType: ann.blurType === "gaussian" ? "mosaic" : "gaussian" }
-                                      : m,
-                                  ),
-                                )
-                                // Force recalculate blur cache
-                                setTimeout(() => {
-                                  const updatedAnn = annotations.find((a) => a.id === ann.id)
-                                  if (updatedAnn) {
-                                    getCachedBlur(
-                                      { ...updatedAnn, blurType: ann.blurType === "gaussian" ? "mosaic" : "gaussian" },
-                                      true,
-                                    )
-                                    requestAnimationFrame(drawCanvas)
-                                  }
-                                }, 0)
+                                handleBlurTypeChange(ann.id, ann.blurType === "gaussian" ? "mosaic" : "gaussian")
+                                // No need for redraw here as drawCanvas() is called after interaction ends
                               }}
                               size="icon"
                               variant="ghost"
