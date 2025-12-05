@@ -1,16 +1,24 @@
 "use client"
 
 import type React from "react"
-import {
-  useState,
-  useRef,
-  useEffect,
-  useCallback,
-  useTransition, // Add useTransition import
-} from "react"
+import { useState, useRef, useEffect, useCallback, useTransition } from "react"
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
-import { Upload, Circle, Square, Copy, Download, Trash2, Sun, Moon, Check, EyeOff, Grid3X3, Waves } from "lucide-react"
+import {
+  Upload,
+  Circle,
+  Square,
+  Copy,
+  Download,
+  Trash2,
+  Sun,
+  Moon,
+  Check,
+  EyeOff,
+  Grid3X3,
+  Waves,
+  Blend,
+} from "lucide-react"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { stackBlurCanvas } from "@/lib/stackblur"
 
@@ -165,6 +173,324 @@ function drawImageWithEdgeExtension(
   }
 }
 
+type DitherMethod = "floyd-steinberg" | "ordered" | "atkinson" | "halftone"
+type DitherColorMode = "bw" | "8bit" | "full"
+
+const applyDither = (imageData: ImageData, method: DitherMethod, scale: number, colorMode: DitherColorMode) => {
+  const { data, width, height } = imageData
+
+  // First, downscale the image based on pixel scale
+  const scaledWidth = Math.max(1, Math.floor(width / scale))
+  const scaledHeight = Math.max(1, Math.floor(height / scale))
+
+  if (colorMode === "bw") {
+    // Black & white dithering (original grayscale implementation)
+    const scaledData = new Float32Array(scaledWidth * scaledHeight)
+
+    // Downsample to grayscale
+    for (let y = 0; y < scaledHeight; y++) {
+      for (let x = 0; x < scaledWidth; x++) {
+        let r = 0,
+          g = 0,
+          b = 0,
+          count = 0
+        for (let sy = 0; sy < scale && y * scale + sy < height; sy++) {
+          for (let sx = 0; sx < scale && x * scale + sx < width; sx++) {
+            const srcIdx = ((y * scale + sy) * width + (x * scale + sx)) * 4
+            r += data[srcIdx]
+            g += data[srcIdx + 1]
+            b += data[srcIdx + 2]
+            count++
+          }
+        }
+        scaledData[y * scaledWidth + x] = (0.299 * r + 0.587 * g + 0.114 * b) / count
+      }
+    }
+
+    const ditheredData = new Uint8Array(scaledWidth * scaledHeight)
+    applyDitherMethod(scaledData, ditheredData, scaledWidth, scaledHeight, method)
+
+    // Upscale back to original size
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const scaledX = Math.min(Math.floor(x / scale), scaledWidth - 1)
+        const scaledY = Math.min(Math.floor(y / scale), scaledHeight - 1)
+        const value = ditheredData[scaledY * scaledWidth + scaledX]
+        const idx = (y * width + x) * 4
+        data[idx] = value
+        data[idx + 1] = value
+        data[idx + 2] = value
+      }
+    }
+  } else if (colorMode === "full") {
+    // Full color dithering - dither each RGB channel separately
+    const channels = [
+      new Float32Array(scaledWidth * scaledHeight), // R
+      new Float32Array(scaledWidth * scaledHeight), // G
+      new Float32Array(scaledWidth * scaledHeight), // B
+    ]
+
+    // Downsample each channel
+    for (let y = 0; y < scaledHeight; y++) {
+      for (let x = 0; x < scaledWidth; x++) {
+        let r = 0,
+          g = 0,
+          b = 0,
+          count = 0
+        for (let sy = 0; sy < scale && y * scale + sy < height; sy++) {
+          for (let sx = 0; sx < scale && x * scale + sx < width; sx++) {
+            const srcIdx = ((y * scale + sy) * width + (x * scale + sx)) * 4
+            r += data[srcIdx]
+            g += data[srcIdx + 1]
+            b += data[srcIdx + 2]
+            count++
+          }
+        }
+        const idx = y * scaledWidth + x
+        channels[0][idx] = r / count
+        channels[1][idx] = g / count
+        channels[2][idx] = b / count
+      }
+    }
+
+    const ditheredChannels = [
+      new Uint8Array(scaledWidth * scaledHeight),
+      new Uint8Array(scaledWidth * scaledHeight),
+      new Uint8Array(scaledWidth * scaledHeight),
+    ]
+
+    // Apply dithering to each channel
+    for (let c = 0; c < 3; c++) {
+      applyDitherMethod(channels[c], ditheredChannels[c], scaledWidth, scaledHeight, method)
+    }
+
+    // Upscale back to original size
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const scaledX = Math.min(Math.floor(x / scale), scaledWidth - 1)
+        const scaledY = Math.min(Math.floor(y / scale), scaledHeight - 1)
+        const scaledIdx = scaledY * scaledWidth + scaledX
+        const idx = (y * width + x) * 4
+        data[idx] = ditheredChannels[0][scaledIdx]
+        data[idx + 1] = ditheredChannels[1][scaledIdx]
+        data[idx + 2] = ditheredChannels[2][scaledIdx]
+      }
+    }
+  } else if (colorMode === "8bit") {
+    // 8-bit color dithering - reduced palette (8 colors: 3-bit RGB)
+    const channels = [
+      new Float32Array(scaledWidth * scaledHeight),
+      new Float32Array(scaledWidth * scaledHeight),
+      new Float32Array(scaledWidth * scaledHeight),
+    ]
+
+    // Downsample each channel
+    for (let y = 0; y < scaledHeight; y++) {
+      for (let x = 0; x < scaledWidth; x++) {
+        let r = 0,
+          g = 0,
+          b = 0,
+          count = 0
+        for (let sy = 0; sy < scale && y * scale + sy < height; sy++) {
+          for (let sx = 0; sx < scale && x * scale + sx < width; sx++) {
+            const srcIdx = ((y * scale + sy) * width + (x * scale + sx)) * 4
+            r += data[srcIdx]
+            g += data[srcIdx + 1]
+            b += data[srcIdx + 2]
+            count++
+          }
+        }
+        const idx = y * scaledWidth + x
+        channels[0][idx] = r / count
+        channels[1][idx] = g / count
+        channels[2][idx] = b / count
+      }
+    }
+
+    const ditheredChannels = [
+      new Uint8Array(scaledWidth * scaledHeight),
+      new Uint8Array(scaledWidth * scaledHeight),
+      new Uint8Array(scaledWidth * scaledHeight),
+    ]
+
+    // Apply dithering to each channel with 8-bit quantization (2 levels per channel = 8 colors)
+    for (let c = 0; c < 3; c++) {
+      applyDitherMethod8bit(channels[c], ditheredChannels[c], scaledWidth, scaledHeight, method)
+    }
+
+    // Upscale back to original size
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const scaledX = Math.min(Math.floor(x / scale), scaledWidth - 1)
+        const scaledY = Math.min(Math.floor(y / scale), scaledHeight - 1)
+        const scaledIdx = scaledY * scaledWidth + scaledX
+        const idx = (y * width + x) * 4
+        data[idx] = ditheredChannels[0][scaledIdx]
+        data[idx + 1] = ditheredChannels[1][scaledIdx]
+        data[idx + 2] = ditheredChannels[2][scaledIdx]
+      }
+    }
+  }
+}
+
+const applyDitherMethod = (
+  scaledData: Float32Array,
+  ditheredData: Uint8Array,
+  scaledWidth: number,
+  scaledHeight: number,
+  method: DitherMethod,
+) => {
+  if (method === "floyd-steinberg") {
+    const errors = new Float32Array(scaledData)
+    for (let y = 0; y < scaledHeight; y++) {
+      for (let x = 0; x < scaledWidth; x++) {
+        const idx = y * scaledWidth + x
+        const oldPixel = errors[idx]
+        const newPixel = oldPixel < 128 ? 0 : 255
+        ditheredData[idx] = newPixel
+        const error = oldPixel - newPixel
+
+        if (x + 1 < scaledWidth) errors[idx + 1] += (error * 7) / 16
+        if (y + 1 < scaledHeight) {
+          if (x > 0) errors[idx + scaledWidth - 1] += (error * 3) / 16
+          errors[idx + scaledWidth] += (error * 5) / 16
+          if (x + 1 < scaledWidth) errors[idx + scaledWidth + 1] += (error * 1) / 16
+        }
+      }
+    }
+  } else if (method === "ordered") {
+    const bayerMatrix = [
+      [0, 8, 2, 10],
+      [12, 4, 14, 6],
+      [3, 11, 1, 9],
+      [15, 7, 13, 5],
+    ]
+    for (let y = 0; y < scaledHeight; y++) {
+      for (let x = 0; x < scaledWidth; x++) {
+        const idx = y * scaledWidth + x
+        const threshold = (bayerMatrix[y % 4][x % 4] / 16) * 255
+        ditheredData[idx] = scaledData[idx] > threshold ? 255 : 0
+      }
+    }
+  } else if (method === "atkinson") {
+    const errors = new Float32Array(scaledData)
+    for (let y = 0; y < scaledHeight; y++) {
+      for (let x = 0; x < scaledWidth; x++) {
+        const idx = y * scaledWidth + x
+        const oldPixel = errors[idx]
+        const newPixel = oldPixel < 128 ? 0 : 255
+        ditheredData[idx] = newPixel
+        const error = (oldPixel - newPixel) / 8
+
+        if (x + 1 < scaledWidth) errors[idx + 1] += error
+        if (x + 2 < scaledWidth) errors[idx + 2] += error
+        if (y + 1 < scaledHeight) {
+          if (x > 0) errors[idx + scaledWidth - 1] += error
+          errors[idx + scaledWidth] += error
+          if (x + 1 < scaledWidth) errors[idx + scaledWidth + 1] += error
+        }
+        if (y + 2 < scaledHeight) {
+          errors[idx + scaledWidth * 2] += error
+        }
+      }
+    }
+  } else if (method === "halftone") {
+    for (let y = 0; y < scaledHeight; y++) {
+      for (let x = 0; x < scaledWidth; x++) {
+        const idx = y * scaledWidth + x
+        const cx = (x % 4) - 1.5
+        const cy = (y % 4) - 1.5
+        const dist = Math.sqrt(cx * cx + cy * cy) / 2.12
+        const threshold = dist * 255
+        ditheredData[idx] = scaledData[idx] > threshold ? 255 : 0
+      }
+    }
+  }
+}
+
+const applyDitherMethod8bit = (
+  scaledData: Float32Array,
+  ditheredData: Uint8Array,
+  scaledWidth: number,
+  scaledHeight: number,
+  method: DitherMethod,
+) => {
+  const levels = 4 // 4 levels per channel = 64 colors
+  const step = 255 / (levels - 1)
+
+  const quantize = (value: number) => {
+    const level = Math.round(value / step)
+    return Math.min(255, Math.max(0, level * step))
+  }
+
+  if (method === "floyd-steinberg") {
+    const errors = new Float32Array(scaledData)
+    for (let y = 0; y < scaledHeight; y++) {
+      for (let x = 0; x < scaledWidth; x++) {
+        const idx = y * scaledWidth + x
+        const oldPixel = errors[idx]
+        const newPixel = quantize(oldPixel)
+        ditheredData[idx] = newPixel
+        const error = oldPixel - newPixel
+
+        if (x + 1 < scaledWidth) errors[idx + 1] += (error * 7) / 16
+        if (y + 1 < scaledHeight) {
+          if (x > 0) errors[idx + scaledWidth - 1] += (error * 3) / 16
+          errors[idx + scaledWidth] += (error * 5) / 16
+          if (x + 1 < scaledWidth) errors[idx + scaledWidth + 1] += (error * 1) / 16
+        }
+      }
+    }
+  } else if (method === "ordered") {
+    const bayerMatrix = [
+      [0, 8, 2, 10],
+      [12, 4, 14, 6],
+      [3, 11, 1, 9],
+      [15, 7, 13, 5],
+    ]
+    for (let y = 0; y < scaledHeight; y++) {
+      for (let x = 0; x < scaledWidth; x++) {
+        const idx = y * scaledWidth + x
+        const threshold = (bayerMatrix[y % 4][x % 4] / 16 - 0.5) * step
+        ditheredData[idx] = quantize(scaledData[idx] + threshold)
+      }
+    }
+  } else if (method === "atkinson") {
+    const errors = new Float32Array(scaledData)
+    for (let y = 0; y < scaledHeight; y++) {
+      for (let x = 0; x < scaledWidth; x++) {
+        const idx = y * scaledWidth + x
+        const oldPixel = errors[idx]
+        const newPixel = quantize(oldPixel)
+        ditheredData[idx] = newPixel
+        const error = (oldPixel - newPixel) / 8
+
+        if (x + 1 < scaledWidth) errors[idx + 1] += error
+        if (x + 2 < scaledWidth) errors[idx + 2] += error
+        if (y + 1 < scaledHeight) {
+          if (x > 0) errors[idx + scaledWidth - 1] += error
+          errors[idx + scaledWidth] += error
+          if (x + 1 < scaledWidth) errors[idx + scaledWidth + 1] += error
+        }
+        if (y + 2 < scaledHeight) {
+          errors[idx + scaledWidth * 2] += error
+        }
+      }
+    }
+  } else if (method === "halftone") {
+    for (let y = 0; y < scaledHeight; y++) {
+      for (let x = 0; x < scaledWidth; x++) {
+        const idx = y * scaledWidth + x
+        const cx = (x % 4) - 1.5
+        const cy = (y % 4) - 1.5
+        const dist = Math.sqrt(cx * cx + cy * cy) / 2.12
+        const threshold = (dist - 0.5) * step
+        ditheredData[idx] = quantize(scaledData[idx] + threshold)
+      }
+    }
+  }
+}
+
 interface Annotation {
   id: string
   x: number
@@ -175,9 +501,12 @@ interface Annotation {
   zoom: number
   shape: "circle" | "rectangle"
   darkBorder: boolean
-  type: "magnifier" | "blur"
+  type: "magnifier" | "blur" | "dither"
   blurAmount: number
   blurType: "gaussian" | "mosaic"
+  ditherMethod: DitherMethod
+  ditherScale: number
+  ditherColorMode: DitherColorMode
 }
 
 export function ImageMagnifierTool() {
@@ -209,6 +538,7 @@ export function ImageMagnifierTool() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const canvasContainerRef = useRef<HTMLDivElement>(null) // Added ref for canvas container
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -313,6 +643,57 @@ export function ImageMagnifierTool() {
     [image, canvasDisplaySize],
   )
 
+  const calculateDither = useCallback(
+    (ann: Annotation): ImageData | null => {
+      if (ann.type !== "dither" || !image) return null
+
+      const tempCanvas = document.createElement("canvas")
+      const tempCtx = tempCanvas.getContext("2d", { willReadFrequently: true })
+      if (!tempCtx) return null
+
+      const scaleX = image.naturalWidth / canvasDisplaySize.width
+      const scaleY = image.naturalHeight / canvasDisplaySize.height
+
+      if (ann.shape === "rectangle") {
+        const regionWidth = Math.ceil(ann.width)
+        const regionHeight = Math.ceil(ann.height)
+
+        tempCanvas.width = regionWidth
+        tempCanvas.height = regionHeight
+
+        const srcX = (ann.x - ann.width / 2) * scaleX
+        const srcY = (ann.y - ann.height / 2) * scaleY
+        const srcW = regionWidth * scaleX
+        const srcH = regionHeight * scaleY
+
+        tempCtx.drawImage(image, srcX, srcY, srcW, srcH, 0, 0, regionWidth, regionHeight)
+
+        const imageData = tempCtx.getImageData(0, 0, regionWidth, regionHeight)
+        // Pass ditherColorMode to applyDither
+        applyDither(imageData, ann.ditherMethod, ann.ditherScale, ann.ditherColorMode)
+        return imageData
+      } else {
+        const diameter = Math.ceil(ann.radius * 2)
+
+        tempCanvas.width = diameter
+        tempCanvas.height = diameter
+
+        const srcX = (ann.x - ann.radius) * scaleX
+        const srcY = (ann.y - ann.radius) * scaleY
+        const srcW = diameter * scaleX
+        const srcH = diameter * scaleY
+
+        tempCtx.drawImage(image, srcX, srcY, srcW, srcH, 0, 0, diameter, diameter)
+
+        const imageData = tempCtx.getImageData(0, 0, diameter, diameter)
+        // Pass ditherColorMode to applyDither
+        applyDither(imageData, ann.ditherMethod, ann.ditherScale, ann.ditherColorMode)
+        return imageData
+      }
+    },
+    [image, canvasDisplaySize],
+  )
+
   const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current
     if (!canvas || !image || canvasDisplaySize.width === 0) return
@@ -345,6 +726,7 @@ export function ImageMagnifierTool() {
       const sourceY = ann.y * scaleY
 
       if (ann.type === "blur") {
+        // ... existing blur code ...
         const blurRadius = Math.min(Math.round(ann.blurAmount), 40)
         const padding = blurRadius * 2
 
@@ -375,6 +757,44 @@ export function ImageMagnifierTool() {
                 tempCanvas,
                 padding,
                 padding,
+                ann.radius * 2,
+                ann.radius * 2,
+                ann.x - ann.radius,
+                ann.y - ann.radius,
+                ann.radius * 2,
+                ann.radius * 2,
+              )
+            }
+          }
+        }
+      } else if (ann.type === "dither") {
+        const ditheredData = calculateDither(ann)
+
+        if (ditheredData) {
+          const tempCanvas = document.createElement("canvas")
+          tempCanvas.width = ditheredData.width
+          tempCanvas.height = ditheredData.height
+          const tempCtx = tempCanvas.getContext("2d")
+          if (tempCtx) {
+            tempCtx.putImageData(ditheredData, 0, 0)
+
+            if (ann.shape === "rectangle") {
+              ctx.drawImage(
+                tempCanvas,
+                0,
+                0,
+                ann.width,
+                ann.height,
+                ann.x - ann.width / 2,
+                ann.y - ann.height / 2,
+                ann.width,
+                ann.height,
+              )
+            } else {
+              ctx.drawImage(
+                tempCanvas,
+                0,
+                0,
                 ann.radius * 2,
                 ann.radius * 2,
                 ann.x - ann.radius,
@@ -419,8 +839,7 @@ export function ImageMagnifierTool() {
 
       ctx.restore()
 
-      // Only draw borders for magnifiers, not blur regions
-      if (ann.type !== "blur") {
+      if (ann.type === "magnifier") {
         ctx.save()
         ctx.beginPath()
         if (ann.shape === "rectangle") {
@@ -485,7 +904,7 @@ export function ImageMagnifierTool() {
         ctx.stroke()
       }
     })
-  }, [image, annotations, canvasDisplaySize, selectedAnnotation, calculateBlur])
+  }, [image, annotations, canvasDisplaySize, selectedAnnotation, calculateBlur, calculateDither])
 
   useEffect(() => {
     drawCanvas()
@@ -573,23 +992,32 @@ export function ImageMagnifierTool() {
     setIsDragOver(false)
   }
 
-  const addAnnotation = (shape: "circle" | "rectangle" = "circle", type: "magnifier" | "blur" = "magnifier") => {
-    if (!canvasDisplaySize.width) return
+  const addAnnotation = (
+    shape: "circle" | "rectangle" = "circle",
+    type: "magnifier" | "blur" | "dither" = "magnifier",
+  ) => {
+    if (!canvasContainerRef.current) return
+
+    const container = canvasContainerRef.current.getBoundingClientRect()
     const newAnnotation: Annotation = {
       id: Date.now().toString(),
-      x: canvasDisplaySize.width / 2,
-      y: canvasDisplaySize.height / 2,
-      radius: 60,
-      width: 120,
-      height: 120,
-      zoom: 2,
+      x: container.width / 2,
+      y: container.height / 2,
+      radius: 80,
+      width: 160,
+      height: 160,
+      zoom: type === "magnifier" ? 2 : 1,
       shape,
-      darkBorder: darkBorder,
+      darkBorder: false,
       type,
-      blurAmount: 20,
+      blurAmount: 10,
       blurType: "gaussian",
+      ditherMethod: "floyd-steinberg",
+      ditherScale: 2,
+      ditherColorMode: "bw", // Default to black & white
     }
-    setAnnotations([...annotations, newAnnotation])
+
+    setAnnotations((prev) => [...prev, newAnnotation])
     setSelectedAnnotation(newAnnotation.id)
   }
 
@@ -1446,6 +1874,20 @@ export function ImageMagnifierTool() {
                 <TooltipContent>Add Blur</TooltipContent>
               </Tooltip>
 
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    onClick={() => addAnnotation("rectangle", "dither")}
+                    size="icon"
+                    variant="ghost"
+                    className="h-8 w-8 rounded-full hover:bg-black/10"
+                  >
+                    <Blend className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Add Dither</TooltipContent>
+              </Tooltip>
+
               <div className="w-px h-5 bg-black/10 mx-1" />
 
               <Tooltip>
@@ -1518,6 +1960,7 @@ export function ImageMagnifierTool() {
         ) : (
           <div
             className={`relative transition-all ${isDragOver ? "ring-4 ring-blue-400 ring-offset-4 rounded-lg" : ""}`}
+            ref={canvasContainerRef} // Assign ref to the container holding the canvas
           >
             <canvas
               ref={canvasRef}
@@ -1559,7 +2002,6 @@ export function ImageMagnifierTool() {
                   >
                     {ann.type === "blur" ? (
                       <>
-                        {/* Update slider onValueChange to use startTransition */}
                         <Slider
                           min={1}
                           max={40}
@@ -1573,7 +2015,6 @@ export function ImageMagnifierTool() {
                             })
                           }}
                           onValueCommit={() => {
-                            // Trigger redraw after commit
                             drawCanvas()
                           }}
                           className="w-24"
@@ -1587,7 +2028,6 @@ export function ImageMagnifierTool() {
                             <Button
                               onClick={() => {
                                 handleBlurTypeChange(ann.id, ann.blurType === "gaussian" ? "mosaic" : "gaussian")
-                                // No need for redraw here as drawCanvas() is called after interaction ends
                               }}
                               size="icon"
                               variant="ghost"
@@ -1622,6 +2062,196 @@ export function ImageMagnifierTool() {
                           <TooltipContent>Delete</TooltipContent>
                         </Tooltip>
                       </>
+                    ) : ann.type === "dither" ? (
+                      <>
+                        <Slider
+                          min={1}
+                          max={8}
+                          step={1}
+                          value={[ann.ditherScale]}
+                          onValueChange={(value) => {
+                            startTransition(() => {
+                              setAnnotations((prev) =>
+                                prev.map((a) => (a.id === ann.id ? { ...a, ditherScale: value[0] } : a)),
+                              )
+                            })
+                          }}
+                          onValueCommit={() => {
+                            drawCanvas()
+                          }}
+                          className="w-20"
+                        />
+                        <span className="text-xs text-muted-foreground w-6">{ann.ditherScale}px</span>
+
+                        <div className="w-px h-4 bg-black/10" />
+
+                        {/* Dither method selector */}
+                        <div className="flex items-center gap-0.5">
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                onClick={() => {
+                                  setAnnotations((prev) =>
+                                    prev.map((a) =>
+                                      a.id === ann.id ? { ...a, ditherMethod: "floyd-steinberg" as DitherMethod } : a,
+                                    ),
+                                  )
+                                }}
+                                size="icon"
+                                variant="ghost"
+                                className={`h-6 w-6 rounded-full hover:bg-black/10 ${ann.ditherMethod === "floyd-steinberg" ? "bg-black/10" : ""}`}
+                              >
+                                <span className="text-[10px] font-medium">FS</span>
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Floyd-Steinberg</TooltipContent>
+                          </Tooltip>
+
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                onClick={() => {
+                                  setAnnotations((prev) =>
+                                    prev.map((a) =>
+                                      a.id === ann.id ? { ...a, ditherMethod: "ordered" as DitherMethod } : a,
+                                    ),
+                                  )
+                                }}
+                                size="icon"
+                                variant="ghost"
+                                className={`h-6 w-6 rounded-full hover:bg-black/10 ${ann.ditherMethod === "ordered" ? "bg-black/10" : ""}`}
+                              >
+                                <span className="text-[10px] font-medium">OR</span>
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Ordered (Bayer)</TooltipContent>
+                          </Tooltip>
+
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                onClick={() => {
+                                  setAnnotations((prev) =>
+                                    prev.map((a) =>
+                                      a.id === ann.id ? { ...a, ditherMethod: "atkinson" as DitherMethod } : a,
+                                    ),
+                                  )
+                                }}
+                                size="icon"
+                                variant="ghost"
+                                className={`h-6 w-6 rounded-full hover:bg-black/10 ${ann.ditherMethod === "atkinson" ? "bg-black/10" : ""}`}
+                              >
+                                <span className="text-[10px] font-medium">AT</span>
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Atkinson</TooltipContent>
+                          </Tooltip>
+
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                onClick={() => {
+                                  setAnnotations((prev) =>
+                                    prev.map((a) =>
+                                      a.id === ann.id ? { ...a, ditherMethod: "halftone" as DitherMethod } : a,
+                                    ),
+                                  )
+                                }}
+                                size="icon"
+                                variant="ghost"
+                                className={`h-6 w-6 rounded-full hover:bg-black/10 ${ann.ditherMethod === "halftone" ? "bg-black/10" : ""}`}
+                              >
+                                <span className="text-[10px] font-medium">HT</span>
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Halftone</TooltipContent>
+                          </Tooltip>
+                        </div>
+
+                        <div className="w-px h-4 bg-black/10" />
+
+                        {/* Dither color mode selector */}
+                        <div className="flex items-center gap-0.5">
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                onClick={() => {
+                                  setAnnotations((prev) =>
+                                    prev.map((a) =>
+                                      a.id === ann.id ? { ...a, ditherColorMode: "bw" as DitherColorMode } : a,
+                                    ),
+                                  )
+                                }}
+                                size="icon"
+                                variant="ghost"
+                                className={`h-6 w-6 rounded-full hover:bg-black/10 ${ann.ditherColorMode === "bw" ? "bg-black/10" : ""}`}
+                              >
+                                <span className="text-[10px] font-medium">BW</span>
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Black & White</TooltipContent>
+                          </Tooltip>
+
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                onClick={() => {
+                                  setAnnotations((prev) =>
+                                    prev.map((a) =>
+                                      a.id === ann.id ? { ...a, ditherColorMode: "8bit" as DitherColorMode } : a,
+                                    ),
+                                  )
+                                }}
+                                size="icon"
+                                variant="ghost"
+                                className={`h-6 w-6 rounded-full hover:bg-black/10 ${ann.ditherColorMode === "8bit" ? "bg-black/10" : ""}`}
+                              >
+                                <span className="text-[10px] font-medium">64</span>
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>64 Colors</TooltipContent>
+                          </Tooltip>
+
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                onClick={() => {
+                                  setAnnotations((prev) =>
+                                    prev.map((a) =>
+                                      a.id === ann.id ? { ...a, ditherColorMode: "full" as DitherColorMode } : a,
+                                    ),
+                                  )
+                                }}
+                                size="icon"
+                                variant="ghost"
+                                className={`h-6 w-6 rounded-full hover:bg-black/10 ${ann.ditherColorMode === "full" ? "bg-black/10" : ""}`}
+                              >
+                                <span className="text-[10px] font-medium">RGB</span>
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Full Color (RGB)</TooltipContent>
+                          </Tooltip>
+                        </div>
+
+                        <div className="w-px h-4 bg-black/10" />
+
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              onClick={() => {
+                                setAnnotations((prev) => prev.filter((m) => m.id !== ann.id))
+                                setSelectedAnnotation(null)
+                              }}
+                              size="icon"
+                              variant="ghost"
+                              className="h-6 w-6 rounded-full hover:bg-red-100 text-red-500"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Delete</TooltipContent>
+                        </Tooltip>
+                      </>
                     ) : (
                       // Magnifier annotation menu - unchanged
                       <>
@@ -1631,13 +2261,15 @@ export function ImageMagnifierTool() {
                           max={5}
                           step={0.1}
                           onValueChange={(value) => {
-                            setAnnotations((prev) => prev.map((m) => (m.id === ann.id ? { ...m, zoom: value[0] } : m)))
+                            startTransition(() => {
+                              setAnnotations((prev) =>
+                                prev.map((a) => (a.id === ann.id ? { ...a, zoom: value[0] } : a)),
+                              )
+                            })
                           }}
-                          className="w-20"
+                          className="w-24"
                         />
-                        <span className="text-[10px] font-medium text-neutral-600 w-7 text-center tabular-nums">
-                          {ann.zoom.toFixed(1)}x
-                        </span>
+                        <span className="text-xs text-muted-foreground w-8">{ann.zoom.toFixed(1)}×</span>
 
                         <div className="w-px h-4 bg-black/10" />
 
@@ -1646,7 +2278,29 @@ export function ImageMagnifierTool() {
                             <Button
                               onClick={() => {
                                 setAnnotations((prev) =>
-                                  prev.map((m) => (m.id === ann.id ? { ...m, darkBorder: !ann.darkBorder } : m)),
+                                  prev.map((a) =>
+                                    a.id === ann.id
+                                      ? { ...a, shape: a.shape === "circle" ? "rectangle" : "circle" }
+                                      : a,
+                                  ),
+                                )
+                              }}
+                              size="icon"
+                              variant="ghost"
+                              className="h-6 w-6 rounded-full hover:bg-black/10"
+                            >
+                              {ann.shape === "circle" ? <Circle className="h-3 w-3" /> : <Square className="h-3 w-3" />}
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{ann.shape === "circle" ? "Circle" : "Rectangle"}</TooltipContent>
+                        </Tooltip>
+
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              onClick={() => {
+                                setAnnotations((prev) =>
+                                  prev.map((a) => (a.id === ann.id ? { ...a, darkBorder: !a.darkBorder } : a)),
                                 )
                               }}
                               size="icon"
@@ -1656,7 +2310,7 @@ export function ImageMagnifierTool() {
                               {ann.darkBorder ? <Moon className="h-3 w-3" /> : <Sun className="h-3 w-3" />}
                             </Button>
                           </TooltipTrigger>
-                          <TooltipContent>{ann.darkBorder ? "Light Border" : "Dark Border"}</TooltipContent>
+                          <TooltipContent>{ann.darkBorder ? "Dark Border" : "Light Border"}</TooltipContent>
                         </Tooltip>
 
                         <div className="w-px h-4 bg-black/10" />
