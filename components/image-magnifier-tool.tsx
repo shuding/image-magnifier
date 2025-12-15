@@ -717,7 +717,9 @@ export function ImageMagnifierTool() {
 
       const scaleX = image.naturalWidth / displayWidth
       const scaleY = image.naturalHeight / displayHeight
-      const effectScale = Math.min(scaleX, scaleY)
+
+      const dpr = window.devicePixelRatio || 1
+      const effectScale = Math.min(scaleX, scaleY) * (scale / dpr)
 
       ctx.clearRect(0, 0, targetWidth, targetHeight)
       ctx.drawImage(image, 0, 0, targetWidth, targetHeight)
